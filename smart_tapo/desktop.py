@@ -22,8 +22,9 @@ from .config import Rect
 from .desktop_calibration import is_ready, mark_ready
 from .desktop_controller import DesktopController
 from .desktop_storage import DesktopStore
+from .desktop_history import HistoryPanel
 from .frames import atomic_bytes
-from .runtime import ProcessLock
+from .runtime import ProcessLock, hidden_console_options
 from .vision import load_png
 
 
@@ -65,6 +66,8 @@ class DesktopApp:
         self._build_settings()
         self._build_calibration()
         self._build_control()
+        self.history_panel=HistoryPanel(self.notebook,lambda:self.config,self._remember_history_port)
+        self.notebook.add(self.history_panel,text='ประวัติการหยอดแบงค์')
         self.status = tk.StringVar(value='พร้อมตั้งค่า — ยังไม่เปิดกล้องและไม่ส่งแจ้งเตือน')
         ttk.Label(outer, textvariable=self.status, wraplength=940).pack(anchor='w', pady=(10, 3))
         ttk.Label(outer, text='บันทึกการตั้งค่าที่: ' + str(store.config_path), wraplength=940).pack(anchor='w')
@@ -106,24 +109,25 @@ class DesktopApp:
                    ('camera_name','ชื่อกล้องตามที่แสดงใน Tapo'),
                    ('adb_path','ไฟล์ adb.exe'), ('memu_executable','ไฟล์ MEmu.exe (ไม่จำเป็นถ้าเปิดอยู่แล้ว)'),
                    ('adb_serial','อุปกรณ์ MEmu / ADB Serial'),
-                   ('stuck_consecutive_frames','จำนวนภาพต่อเนื่องก่อนเตือน')]
+                   ('stuck_consecutive_frames','จำนวนภาพต่อเนื่องก่อนเตือน'),
+                   ('deposit_history_hours','เก็บประวัติหยอดปกติ (ชั่วโมง)')]
         for row, (key, label) in enumerate(entries):
             self._entry(self.settings,row,key,label,getattr(self.config,key),
                         browse=key in ('adb_path','memu_executable'))
         ttk.Button(self.settings, text='ค้นหาอุปกรณ์', command=self.find_devices).grid(row=4,column=2)
-        ttk.Separator(self.settings).grid(row=6,column=0,columnspan=3,sticky='ew',pady=14)
-        ttk.Label(self.settings,text='Pushover',style='Subheading.TLabel').grid(row=7,column=0,sticky='w')
+        ttk.Separator(self.settings).grid(row=7,column=0,columnspan=3,sticky='ew',pady=14)
+        ttk.Label(self.settings,text='Pushover',style='Subheading.TLabel').grid(row=8,column=0,sticky='w')
         self.token, self.user = tk.StringVar(), tk.StringVar()
-        for row, label, var in ((8,'App Token',self.token),(9,'User / Group Key',self.user)):
+        for row, label, var in ((9,'App Token',self.token),(10,'User / Group Key',self.user)):
             ttk.Label(self.settings,text=label).grid(row=row,column=0,sticky='w',pady=4)
             ttk.Entry(self.settings,textvariable=var,show='*').grid(row=row,column=1,sticky='ew',padx=8,pady=4)
         self.notify = tk.BooleanVar(value=self.config.notify_enabled)
         ttk.Checkbutton(self.settings,text='เปิดส่งแจ้งเตือนจริง (ปิด = เก็บผลทดสอบเท่านั้น)',
-                        variable=self.notify).grid(row=10,column=0,columnspan=3,sticky='w',pady=8)
+                        variable=self.notify).grid(row=11,column=0,columnspan=3,sticky='w',pady=8)
         ttk.Label(self.settings,text='คีย์บันทึกด้วย Windows DPAPI สำหรับบัญชีนี้ ไม่อยู่ใน config หรือ log',
-                  wraplength=800).grid(row=11,column=0,columnspan=3,sticky='w')
+                  wraplength=800).grid(row=12,column=0,columnspan=3,sticky='w')
         actions = ttk.Frame(self.settings)
-        actions.grid(row=12,column=0,columnspan=3,sticky='w',pady=14)
+        actions.grid(row=13,column=0,columnspan=3,sticky='w',pady=14)
         ttk.Button(actions,text='บันทึกการตั้งค่า',command=self.save_settings).pack(side='left',padx=(0,8))
         ttk.Button(actions,text='ล้างคีย์ที่บันทึกไว้',command=self.clear_keys).pack(side='left',padx=(0,8))
         ttk.Button(actions,text='เปิดโฟลเดอร์ข้อมูล',command=self.open_folder).pack(side='left')
@@ -187,8 +191,16 @@ class DesktopApp:
         updates={key:var.get().strip() for key,var in self.form.items()}
         try:updates['stuck_consecutive_frames']=int(updates['stuck_consecutive_frames'])
         except ValueError:raise ValueError('จำนวนภาพก่อนเตือนต้องเป็นจำนวนเต็มบวก') from None
+        try:updates['deposit_history_hours']=float(updates['deposit_history_hours'])
+        except ValueError:raise ValueError('ระยะเก็บประวัติต้องเป็นจำนวนชั่วโมงมากกว่า 0') from None
         updates['notify_enabled']=self.notify.get()
         return replace(self.config,**updates).validate()
+
+    def _remember_history_port(self,port):
+        # This display-only setting does not reconfigure a running detector.
+        updated=replace(self.config,history_web_port=port).validate()
+        self.store.save(updated)
+        self.config=updated
 
     def save_settings(self):
         if self._active() or self.busy:
@@ -244,7 +256,8 @@ class DesktopApp:
         if not self.save_settings(): return
         path=self.config.adb_path
         def work():
-            result=subprocess.run([path,'devices'],capture_output=True,timeout=15,check=True)
+            result=subprocess.run([path,'devices'],capture_output=True,timeout=15,check=True,
+                                  **hidden_console_options())
             devices=[]
             for line in result.stdout.decode('utf-8','replace').splitlines():
                 parts=line.split()
@@ -412,6 +425,7 @@ class DesktopApp:
             self.start_buttons[role].configure(state='disabled' if running or self.busy or self.closing else 'normal')
             self.stop_buttons[role].configure(state='normal' if running and value['state']!='stopping' else 'disabled')
         for text in self.controller.drain_messages():self._append_log(text)
+        self.history_panel.poll(visible=self.notebook.select()==str(self.history_panel))
         def lock_settings(parent):
             for widget in parent.winfo_children():
                 if isinstance(widget,(ttk.Entry,ttk.Combobox,ttk.Checkbutton,ttk.Button)):
@@ -431,6 +445,7 @@ class DesktopApp:
         if self.closing:return
         if (self._active() or self.busy) and not messagebox.askyesno('ปิด Smart Tapo','หยุด Capture/Worker แล้วปิดโปรแกรม?',parent=self.root):return
         self.closing=True
+        self.history_panel.close()
         self.operation_stop.set()
         self.controller.stop_all()
 
@@ -500,6 +515,33 @@ def _smoke_gui_flow(root, app):
                   calibration_ready=is_ready(app.config,store.root),real_notifications=0)
     if not all(result[key] for key in ('worker_stopped','shadow_notification','calibration_ready')):
         raise RuntimeError('GUI worker flow did not complete safely')
+    from .history import get_images,list_events
+    from .history_web import HistoryWebServer
+    from http.cookiejar import CookieJar
+    from urllib.request import HTTPCookieProcessor,build_opener
+    from urllib.parse import urlencode
+    page=list_events(app.config)
+    if not page.events:raise RuntimeError('History did not contain the synthetic event')
+    app.history_panel._render(page)
+    event_id=page.events[0].id
+    result['history_menu_created']=app.notebook.tab(app.history_panel,'text')=='ประวัติการหยอดแบงค์'
+    result['history_event_visible']=event_id in app.history_panel.tree.get_children()
+    result['history_full_image']=any(image.role=='first_full' for image in get_images(app.config,event_id))
+    app.history_panel.server=HistoryWebServer(lambda:app.config)
+    web=app.history_panel.server
+    web.start(0)  # Ephemeral loopback only. Never changes a user's saved port.
+    try:
+        client=build_opener(HTTPCookieProcessor(CookieJar()))
+        with client.open(web.url,timeout=5) as response:
+            body=response.read(1024*1024).decode('utf-8')
+        image_url='http://127.0.0.1:'+str(web.port)+'/image?'+urlencode(dict(id=event_id,role='first_full'))
+        with client.open(image_url,timeout=5) as response:
+            image_bytes=response.read(16*1024*1024+1)
+        result['history_web_served']='ประวัติการหยอดแบงค์' in body and image_bytes.startswith(b'\x89PNG\r\n\x1a\n')
+    finally:
+        web.stop()
+    if not all(result[key] for key in ('history_menu_created','history_event_visible','history_full_image','history_web_served')):
+        raise RuntimeError('GUI history/web smoke did not complete')
     if os.name=='nt':
         store.save_credentials('synthetic-smoke-token','synthetic-smoke-user')
         if store.load_credentials()!=('synthetic-smoke-token','synthetic-smoke-user'):
@@ -522,6 +564,7 @@ def smoke_gui(report_path):
             return result
         finally:
             if app is not None:
+                app.history_panel.close()
                 app.controller.stop_all()
                 deadline=time.monotonic()+20
                 while time.monotonic()<deadline and app._active():
@@ -572,6 +615,7 @@ def main():
             # Also cover OS/window destruction or an unexpected GUI exception,
             # not only the ordinary close-button path.
             app.controller.stop_all()
+            app.history_panel.close()
 
 
 if __name__=='__main__':

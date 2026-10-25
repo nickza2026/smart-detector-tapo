@@ -2,9 +2,17 @@ from __future__ import annotations
 
 import os
 import signal
+import subprocess
 import threading
 from contextlib import contextmanager
 from pathlib import Path
+
+
+def hidden_console_options():
+    """Hide console-tool windows, not the visible MEmu application launcher."""
+    if os.name == 'nt':
+        return {'creationflags': subprocess.CREATE_NO_WINDOW}
+    return {}
 
 
 class ProcessLock:

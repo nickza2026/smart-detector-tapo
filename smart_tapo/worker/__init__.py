@@ -65,6 +65,7 @@ class Worker:
             CREATE TABLE IF NOT EXISTS settings(name TEXT PRIMARY KEY,value TEXT);
             CREATE INDEX IF NOT EXISTS frames_captured_idx ON frames(captured);
             CREATE INDEX IF NOT EXISTS events_closed_idx ON events(closed);
+            CREATE INDEX IF NOT EXISTS events_started_idx ON events(started DESC,id DESC);
         ''')
         columns = {row['name'] for row in self.db.execute('PRAGMA table_info(events)')}
         for column in ('last_present', 'first_clear'):
@@ -90,7 +91,7 @@ class Worker:
     def active(self):
         return self.db.execute('SELECT * FROM events WHERE closed IS NULL ORDER BY started DESC LIMIT 1').fetchone()
 
-    def snapshot(self, event, role, image, observation=None):
+    def snapshot(self, event, role, image, observation=None, *, full_frame=False):
         existing = self.db.execute('SELECT 1 FROM evidence WHERE event=? AND role=?', (event, role)).fetchone()
         if existing:
             return
@@ -98,12 +99,22 @@ class Worker:
         base = self.config.data_dir.absolute()
         if any(p.is_symlink() for p in (path, *path.parents) if p == base or base in p.parents):
             raise ValueError('Evidence path must not contain symlinks')
-        encoded = getattr(observation, 'roi_png', b'')
+        encoded = b'' if full_frame else getattr(observation, 'roi_png', b'')
         if not encoded:
+            image = Path(image)
+            if full_frame:
+                root = self.config.data_dir / 'frames' / self.config.camera_id
+                if (image.resolve().parent != root.resolve()
+                        or any(p.is_symlink() for p in (image, *image.parents)
+                               if p == base or base in p.parents)):
+                    raise ValueError('Full evidence source must be in the managed spool')
             with Image.open(image) as source:
-                cropped = source.crop(self.config.roi.box())
+                if full_frame and (source.format != 'PNG' or source.size != self.config.expected_size):
+                    raise ValueError('Invalid full screenshot')
+                source.load()
+                captured = source if full_frame else source.crop(self.config.roi.box())
                 content = io.BytesIO()
-                cropped.save(content, format='PNG')
+                captured.save(content, format='PNG')
             encoded = content.getvalue()
         atomic_bytes(path, encoded)
         self.db.execute('INSERT INTO evidence VALUES(?,?,?)', (event, role, str(path)))
@@ -199,6 +210,7 @@ class Worker:
                     event_id = uuid.uuid4().hex
                     self.db.execute("INSERT INTO events(id,kind,started) VALUES(?,'candidate',?)", (event_id, frame.captured_at))
                     self.snapshot(event_id, 'first', image, observation)
+                    self.snapshot(event_id, 'first_full', image, full_frame=True)
                     event = self.active()
                 self.db.execute('UPDATE events SET last_present=?,first_clear=NULL WHERE id=?', (frame.captured_at, event['id']))
                 if self.count >= self.config.stuck_consecutive_frames:
@@ -266,12 +278,16 @@ class Worker:
                 pending = self.db.execute("SELECT 1 FROM notifications WHERE event=? AND status IN ('pending','failed','ambiguous')", (event['id'],)).fetchone()
                 if pending:
                     continue
-                ttl = self.config.alert_evidence_days * 86400 if event['kind'] == 'stuck' else self.config.non_alert_images_minutes * 60
+                normal = event['kind'] == 'normal_visual'
+                ttl = (self.config.deposit_history_hours * 3600 if normal else
+                       self.config.alert_evidence_days * 86400 if event['kind'] == 'stuck' else
+                       self.config.non_alert_images_minutes * 60)
                 if now - event['closed'] > ttl:
                     for row in self.db.execute('SELECT * FROM evidence WHERE event=?', (event['id'],)).fetchall():
                         if self.unlink_owned(row['path'], self.config.data_dir / 'events' / self.config.camera_id):
                             self.db.execute('DELETE FROM evidence WHERE event=? AND role=?', (event['id'], row['role']))
-                if now - event['closed'] > self.config.event_history_days * 86400 and not self.db.execute('SELECT 1 FROM evidence WHERE event=?', (event['id'],)).fetchone():
+                history_ttl = ttl if normal else self.config.event_history_days * 86400
+                if now - event['closed'] > history_ttl and not self.db.execute('SELECT 1 FROM evidence WHERE event=?', (event['id'],)).fetchone():
                     self.db.execute('DELETE FROM notifications WHERE event=?', (event['id'],))
                     self.db.execute('DELETE FROM events WHERE id=?', (event['id'],))
 

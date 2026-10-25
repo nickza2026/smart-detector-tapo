@@ -75,6 +75,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(len(self.notifications()), 1)
 
     def test_normal_history_and_safe_cleanup(self):
+        self.worker.config = replace(self.config, deposit_history_hours=5 / 60)
         args = self.frame(1)
         self.frame(2, 'EMPTY')
         self.frame(3, 'EMPTY')
@@ -100,7 +101,7 @@ class WorkerTests(unittest.TestCase):
         self.assertTrue(temporary.exists())
         self.assertTrue(outside.exists())
         self.assertEqual(self.worker.db.execute('SELECT count(*) FROM evidence').fetchone()[0], 0)
-        self.assertEqual(self.worker.db.execute('SELECT count(*) FROM events').fetchone()[0], 1)
+        self.assertEqual(self.worker.db.execute('SELECT count(*) FROM events').fetchone()[0], 0)
         self.assertEqual(self.worker.db.execute('SELECT image FROM frames WHERE id=?', (args[0].frame_id,)).fetchone()[0], None)
         self.assertLess(event['first_clear'], event['closed'])
 

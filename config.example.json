@@ -1,4 +1,5 @@
 {
+  "history_web_port": 8080,
   "camera_id": "cabinet-1",
   "data_dir": "data",
   "baseline_path": "calibration/empty.png",
@@ -19,6 +20,7 @@
   "pixel_threshold": 25,
   "rolling_frames_minutes": 5,
   "non_alert_images_minutes": 5,
+  "deposit_history_hours": 24,
   "alert_evidence_days": 7,
   "event_history_days": 30,
   "cleanup_interval_seconds": 30,

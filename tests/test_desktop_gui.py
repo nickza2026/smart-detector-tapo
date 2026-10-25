@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import subprocess
 import tkinter as tk
 import unittest
 from pathlib import Path
@@ -110,6 +111,16 @@ class DesktopGuiTests(unittest.TestCase):
         self.assertEqual(self.controller.stops,1)
         self.assertTrue(self.app.closing)
         self.assertTrue(self.app.operation_stop.is_set())
+
+    def test_device_discovery_hides_console_and_still_lists_devices(self):
+        result=subprocess.CompletedProcess([],0,b'List of devices attached\nemulator-5554\tdevice\n',b'')
+        with patch('smart_tapo.desktop.hidden_console_options',return_value={'creationflags':0x08000000}), \
+             patch('smart_tapo.desktop.subprocess.run',return_value=result) as runner, \
+             patch.object(self.app,'_async',side_effect=lambda work,done:done(work())):
+            self.app.find_devices()
+        runner.assert_called_once_with([self.app.config.adb_path,'devices'],capture_output=True,
+                                       timeout=15,check=True,creationflags=0x08000000)
+        self.assertEqual(self.app.form['adb_serial'].get(),'emulator-5554')
 
     def test_unexpected_window_failure_still_stops_managed_jobs(self):
         fake_root=Mock()
