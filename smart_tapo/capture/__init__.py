@@ -13,6 +13,7 @@ import xml.etree.ElementTree as ET
 from PIL import Image
 
 from smart_tapo.frames import image_storage_bytes, publish_frame
+from smart_tapo.runtime import hidden_console_options
 
 LOG = logging.getLogger(__name__)
 
@@ -39,7 +40,8 @@ class Adb:
         argv += list(args)
         try:
             result = self.runner(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                 timeout=self.config.adb_timeout_seconds, check=False)
+                                 timeout=self.config.adb_timeout_seconds, check=False,
+                                 **hidden_console_options())
         except (OSError, subprocess.TimeoutExpired):
             raise CaptureError('ADB unavailable or timed out; check configured path and emulator') from None
         if result.returncode:

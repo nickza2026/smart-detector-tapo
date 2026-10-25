@@ -43,11 +43,13 @@ class Config:
     poll_interval_seconds: float = 0.25
     reminder_interval_seconds: float = 60.0
     notify_enabled: bool = False
+    history_web_port: int = 8080
     difference_threshold: float = 15.0
     changed_pixel_ratio: float = 0.12
     pixel_threshold: int = 25
     rolling_frames_minutes: float = 5.0
     non_alert_images_minutes: float = 5.0
+    deposit_history_hours: float = 24.0
     alert_evidence_days: float = 7.0
     event_history_days: float = 30.0
     cleanup_interval_seconds: float = 30.0
@@ -73,6 +75,8 @@ class Config:
     alignment_spatial_tolerance_pixels: int = 2
 
     def validate(self):
+        if type(self.history_web_port) is not int or not 1 <= self.history_web_port <= 65535:
+            raise ValueError('History web port must be an integer between 1 and 65535')
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", self.camera_id):
             raise ValueError("camera_id must be a safe identifier")
         if len(self.expected_size) != 2 or any(type(v) is not int or v <= 0 for v in self.expected_size):
@@ -91,7 +95,7 @@ class Config:
                 raise ValueError(name + " must be a positive integer")
         for name in ("capture_interval_seconds", "max_frame_gap_seconds", "max_live_age_seconds",
                      "poll_interval_seconds", "reminder_interval_seconds", "difference_threshold",
-                     "rolling_frames_minutes", "non_alert_images_minutes", "alert_evidence_days",
+                     "rolling_frames_minutes", "non_alert_images_minutes", "deposit_history_hours", "alert_evidence_days",
                      "event_history_days", "cleanup_interval_seconds", "max_image_storage_mb",
                      "adb_timeout_seconds", "startup_timeout_seconds", "ui_check_interval_seconds",
                      "alignment_max_shift_pixels", "alignment_max_rotation_degrees",

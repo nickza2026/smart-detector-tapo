@@ -1,5 +1,24 @@
 # หลักฐานการตรวจต้นแบบ
 
+## ล่าสุด: ประวัติการหยอดแบงค์และเว็บ localhost (ยังไม่เผยแพร่)
+
+- Snapshot สุดท้าย: 90 tests รันบน Mac ผ่าน 89 ข้อ ข้าม Windows console API 1 ข้อ; source และ frozen windowed macOS smoke ผ่านทุก flag รวมประวัติ/ภาพเต็ม/เว็บ พร้อม `pip check` และ `git diff --check` ผ่าน ตรวจ native viewer เปิด PNG และปุ่มประวัติพอดีหน้าต่างขั้นต่ำ 850×650 แล้วบน Mac
+- เพิ่ม GUI ประวัติเรียงเวลาเริ่มล่าสุดก่อน แบ่งหน้าละไม่เกิน 100 รายการ และดูภาพในโปรแกรมได้ ใช้ SQLite reader แบบ read-only ตรวจเจ้าของกล้องและเส้นทางภาพ ไม่เปิดฐานข้อมูลว่างขึ้นมาเอง
+- เพิ่ม `deposit_history_hours=24` แยกจากค่า 5 นาทีเดิม เพื่อให้ config เก่าได้กติกาใหม่โดยไม่ rewrite ไฟล์ผู้ใช้ คิดเวลาเต็มหลังเหตุการณ์ปกติจบ และลบรายการพร้อมภาพเมื่อหมดอายุโดยยังป้องกัน active/pending/ลบไฟล์ไม่สำเร็จ
+- เก็บ full screenshot ครั้งแรกของเหตุการณ์แยกเป็น `first_full` พร้อม ROI evidence เดิม ไม่เก็บทุกเฟรมเป็นวิดีโอ ภาพ raw ที่ประมวลผลแล้วคงวนลบ 5 นาที ภาพค้างยังเป็น 7 วัน ประวัติชนิดอื่นยังใช้กติกาเดิม และโควต้าภาพรวมยังเป็น 512 MB ตามค่า config
+- เว็บใช้ปุ่มเริ่ม/หยุด เลือกและจำพอร์ต ไม่เริ่มเอง จำกัด 127.0.0.1 ใช้ session จากปุ่มเปิดเบราว์เซอร์ ตรวจ Host/Origin ไม่เปิด CORS ไม่รับคำสั่งแก้ข้อมูล/ควบคุม Worker และปิด listener เมื่อปิด GUI รวมเส้นทาง window failure
+- ทดสอบ Chromium จริงด้วย profile และข้อมูลจำลองแยก: แสดงหน้าภาษาไทย, ลำดับล่าสุด, คลิกตามลิงก์จริง, โหลด PNG เต็ม 720×1280 และไม่มี horizontal overflow ที่ viewport 390px ผ่าน มี screenshot เฉพาะข้อมูลสังเคราะห์ใน `/tmp` ไม่ใช้ภาพผู้ใช้เป็น fixture
+- เพิ่ม frozen GUI smoke ตรวจ `history_menu_created`, `history_event_visible`, `history_full_image`, `history_web_served` นอกเหนือจาก lifecycle/shadow event เดิม ผ่านทั้ง source และ macOS windowed bundle ไม่มี ADB/MEmu/Pushover จริง
+- การตรวจ Windows console API/DPAPI และ frozen Windows รุ่นนี้ยังต้องผ่าน Actions หลังอนุญาต push ไม่ถือว่า Mac หรือ mocks แทน Windows จริง และไม่ถือว่าปัญหา alignment หน้างานได้รับการแก้แล้ว
+
+## แก้ console ของ ADB เปิดแทรกหน้าต่าง GUI
+
+- จำลอง Windows กับ adapter เดิมแล้วพบจริงว่า `Adb.run()` ไม่ส่ง `CREATE_NO_WINDOW` จากนั้นแก้ helper กลางให้ใช้ flag เฉพาะ Windows ทั้ง adapter ที่ใช้ Capture/ภาพอ้างอิงและปุ่มค้นหาอุปกรณ์
+- ไม่ใช้ flag กับ MEmu launcher ไม่เปลี่ยน argv เป็น shell และยังเก็บ binary stdout/stderr/timeout/error sanitization เหมือนเดิม
+- เพิ่ม regression ตรวจ flags, selected/unselected ADB commands, PNG bytes, device list และ MEmu GUI ไม่ถูกซ่อน พร้อม Windows-only test ที่เปิด child จริงและตรวจ `GetConsoleWindow()`; test หลังนี้ต้องรันบน Windows ไม่ถือว่า mock บน Mac เป็นหลักฐานนั้น
+- ชุดทดสอบบน Mac รัน 60 ข้อ: ผ่าน 59 และข้าม 1 ข้อที่ต้องใช้ Windows จริง; `compileall`, `pip check` และ `git diff --check` ผ่าน
+- ทดสอบ GUI source smoke ใน temporary profile ผ่าน ไม่มีการติดต่อ ADB/MEmu/Pushover จริง การแก้ยังต้อง build Windows และเผยแพร่ exe ใหม่; Release `v0.1.0` เดิมไม่มีการแก้นี้
+
 ## ล่าสุด: Desktop GUI แทนการบังคับเปิด CMD
 
 เพิ่ม entrypoint `SmartTapo.exe` แบบ `--onefile --windowed`, Tk GUI สามแท็บ ตั้งค่า/ภาพช่องว่าง/เริ่มหยุด ไม่บังคับ `--config` ในการใช้งานปกติ ส่วน CLI เดิมเก็บสำหรับ developer เท่านั้น
