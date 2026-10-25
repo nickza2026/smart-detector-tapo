@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 import time
 import unittest
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -24,7 +25,7 @@ class HistoryWebTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.config = replace(Config(), data_dir=self.root)
         self.db_path = self.root / 'worker.sqlite3'
-        with sqlite3.connect(self.db_path) as db:
+        with closing(sqlite3.connect(self.db_path)) as db, db:
             db.executescript('''
                 CREATE TABLE settings(name TEXT PRIMARY KEY,value TEXT);
                 CREATE TABLE events(id TEXT PRIMARY KEY,kind TEXT,started REAL,
@@ -42,7 +43,7 @@ class HistoryWebTests(unittest.TestCase):
         self.cookie = None
 
     def event(self, event_id='evt', kind='stuck', started=None, closed=None):
-        with sqlite3.connect(self.db_path) as db:
+        with closing(sqlite3.connect(self.db_path)) as db, db:
             db.execute('INSERT INTO events VALUES (?,?,?,?,?,?)',
                        (event_id, kind, time.time() if started is None else started,
                         None, None, closed))
@@ -52,7 +53,7 @@ class HistoryWebTests(unittest.TestCase):
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f'{event_id}-{role}.png'
         Image.new('RGB', size, 'red').save(path)
-        with sqlite3.connect(self.db_path) as db:
+        with closing(sqlite3.connect(self.db_path)) as db, db:
             db.execute('INSERT INTO evidence VALUES (?,?,?)', (event_id, role, str(path)))
         return path
 

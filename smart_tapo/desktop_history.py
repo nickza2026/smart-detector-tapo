@@ -39,13 +39,15 @@ class HistoryPanel(ttk.Frame):
         self.rows = {}
         self.viewer = None
         self.photo = None
-        ttk.Label(self, text='ประวัติการหยอดแบงค์', style='Subheading.TLabel').pack(anchor='w')
+        self.columnconfigure(0,weight=1)
+        self.rowconfigure(5,weight=1)
+        ttk.Label(self, text='ประวัติการหยอดแบงค์', style='Subheading.TLabel').grid(row=0,column=0,sticky='w')
         self.retention = StringVar()
-        ttk.Label(self, textvariable=self.retention, wraplength=900).pack(anchor='w', pady=4)
+        ttk.Label(self, textvariable=self.retention, wraplength=700).grid(row=1,column=0,sticky='w',pady=4)
         ttk.Label(self, text='เหตุการณ์จากภาพ ไม่ยืนยันว่าเป็นแบงค์หรือว่าตู้รับเงิน/เพิ่มยอดสำเร็จ; '
-                  'วัตถุที่ผ่านระหว่างภาพทุก 1 วินาทีอาจตรวจไม่ทัน', wraplength=900).pack(anchor='w')
+                  'วัตถุที่ผ่านระหว่างภาพทุก 1 วินาทีอาจตรวจไม่ทัน', wraplength=700).grid(row=2,column=0,sticky='w')
         web = ttk.LabelFrame(self, text='เว็บประวัติ — เฉพาะเครื่องนี้ (127.0.0.1)', padding=8)
-        web.pack(fill='x', pady=8)
+        web.grid(row=3,column=0,sticky='ew',pady=8)
         ttk.Label(web, text='Port').pack(side='left')
         self.port_var = StringVar(value=str(getattr(config_provider(), 'history_web_port', 8080)))
         self.port_entry = ttk.Entry(web, textvariable=self.port_var, width=7)
@@ -57,9 +59,9 @@ class HistoryPanel(ttk.Frame):
         self.open_web_button = ttk.Button(web, text='เปิดในเบราว์เซอร์', command=self.open_web, state='disabled')
         self.open_web_button.pack(side='left', padx=4)
         self.web_status = StringVar(value='ยังไม่เปิดเว็บ — ไม่เริ่มอัตโนมัติเมื่อเปิดโปรแกรม')
-        ttk.Label(self, textvariable=self.web_status, wraplength=900).pack(anchor='w')
+        ttk.Label(self, textvariable=self.web_status, wraplength=700).grid(row=4,column=0,sticky='w')
         table = ttk.Frame(self)
-        table.pack(fill='both', expand=True, pady=8)
+        table.grid(row=5,column=0,sticky='nsew',pady=8)
         self.tree = ttk.Treeview(table, columns=('started','last','kind','images'), show='headings', height=7)
         for key, text, width in (('started','เวลาเริ่ม (ล่าสุดก่อน)',170),('last','เวลาที่เห็นล่าสุด',170),
                                  ('kind','สถานะจากภาพ',230),('images','ภาพหลักฐาน',90)):
@@ -71,7 +73,7 @@ class HistoryPanel(ttk.Frame):
         self.tree.configure(yscrollcommand=scroll.set)
         self.tree.bind('<Double-1>', self.show_images)
         actions = ttk.Frame(self)
-        actions.pack(fill='x')
+        actions.grid(row=6,column=0,sticky='ew')
         ttk.Button(actions, text='รีเฟรช / กลับรายการล่าสุด', command=self.refresh).pack(side='left')
         self.previous_button = ttk.Button(actions, text='ก่อนหน้า', command=self.previous_page, state='disabled')
         self.previous_button.pack(side='left', padx=6)
@@ -79,7 +81,7 @@ class HistoryPanel(ttk.Frame):
         self.next_button.pack(side='left')
         ttk.Button(actions, text='ดูภาพที่เลือก', command=self.show_images).pack(side='right')
         self.status = StringVar(value='เปิดแท็บนี้เพื่ออ่านประวัติจาก Worker')
-        ttk.Label(self, textvariable=self.status, wraplength=900).pack(anchor='w', pady=6)
+        ttk.Label(self, textvariable=self.status, wraplength=700).grid(row=7,column=0,sticky='w',pady=6)
 
     def refresh(self):
         self.generation += 1

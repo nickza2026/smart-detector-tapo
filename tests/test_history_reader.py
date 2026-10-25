@@ -1,6 +1,7 @@
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 
@@ -18,7 +19,7 @@ class HistoryReaderTests(unittest.TestCase):
         self.config=replace(Config(),data_dir=self.root/'data')
         self.config.data_dir.mkdir()
         self.path=self.config.data_dir/'worker.sqlite3'
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             db.executescript('CREATE TABLE settings(name TEXT PRIMARY KEY,value TEXT);'
                 'CREATE TABLE events(id TEXT PRIMARY KEY,kind TEXT,started REAL,last_present REAL,first_clear REAL,closed REAL);'
                 'CREATE TABLE evidence(event TEXT,role TEXT,path TEXT,PRIMARY KEY(event,role));')
@@ -29,7 +30,7 @@ class HistoryReaderTests(unittest.TestCase):
         event_id=f'{number:032x}'
         started=self.now-100+number if started is None else started
         closed=started+2 if closed is None else closed
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             db.execute('INSERT INTO events VALUES(?,?,?,?,?,?)',
                        (event_id,kind,started,started+1,closed,closed))
         return event_id
@@ -39,7 +40,7 @@ class HistoryReaderTests(unittest.TestCase):
         folder.mkdir(parents=True,exist_ok=True)
         path=folder/(event_id+'-'+role+'.png')
         Image.new('RGB',(4,4),'white').save(path)
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             db.execute('INSERT INTO evidence VALUES(?,?,?)',(event_id,role,str(path)))
         return path
 

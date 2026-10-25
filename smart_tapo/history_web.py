@@ -13,6 +13,7 @@ import math
 import os
 import re
 import secrets
+import socket
 import stat
 import threading
 from datetime import datetime
@@ -59,7 +60,14 @@ def _document(body, hours):
 class _HTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     block_on_close = False
-    allow_reuse_address = True
+    allow_reuse_address = os.name != 'nt'
+
+    def server_bind(self):
+        # Windows SO_REUSEADDR can steal a live listener, unlike POSIX. Keep
+        # the selected port exclusive instead of silently sharing its traffic.
+        if os.name == 'nt':
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
     def get_request(self):
         connection, address = super().get_request()
