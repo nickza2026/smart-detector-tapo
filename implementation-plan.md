@@ -2,6 +2,8 @@
 
 สถานะ: เริ่ม implementation ต้นแบบ Python สองแอปตามคำอนุญาตแล้ว มี Capture/Worker/SQLite/shadow notifications/cleanup และสคริปต์แพ็ก exe ดูวิธีใช้ปัจจุบันใน `README.md` และผลตรวจจริงใน `VERIFICATION.md` ส่วนเอกสารนี้เป็นฐานข้อกำหนด ไม่ใช่หลักฐานว่า detector หรือ Windows build ผ่านแล้ว
 
+ปรับเกณฑ์ส่งมอบจาก feedback: เครื่องมือ CLI ที่แพ็ก exe ไม่ใช่ UX ที่ผู้ใช้ต้องการ ทางหลักต้องเป็น SmartTapo.exe แบบ windowed ดับเบิลคลิกตั้งค่าและกรอก Pushover ใน GUI สร้าง AppData config เอง ตั้งภาพอ้างอิง/เลือกกรอบและเริ่มหยุดสอง process ได้ในแอป CLI เหลือเป็น developer interface และต้องทดสอบ Windows GUI ใหม่แยกจาก artifact CLI เดิม
+
 อัปเดต Auto-alignment: เพิ่ม ORB/RANSAC จาก static anchors ใกล้ช่องรับ โดยไม่ใช้ detection ROI/UI และไม่เปลี่ยน empty reference เอง จัดภาพก่อนตรวจและเก็บหลักฐานเป็น aligned ROI; มุมเปลี่ยนที่ยอมรับแล้วเริ่มชุดนับใหม่ หากไม่มั่นใจเป็น UNKNOWN ขอบเขตและค่าปัจจุบันอยู่ใน README/VERIFICATION ไม่รับประกันทุกมุมหรือธนบัตรบางระดับ tolerance
 
 ## 1. ขอบเขตและหลักฐานที่มี

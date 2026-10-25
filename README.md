@@ -1,6 +1,23 @@
-# Smart Tapo — ต้นแบบ Windows / MEmu
+# Smart Tapo Desktop — Windows / MEmu
 
-สองแอปในโปรเจกต์ Python เดียว: **capture** ควบคุม MEmu/ADB และเผยแพร่ PNG + ready metadata; **worker** วิเคราะห์ ROI เก็บ SQLite/หลักฐาน แจ้งเตือน และ cleanup โดยใช้ local disk เครื่องเดียวกัน ไม่ต้องติดตั้ง PostgreSQL
+โปรแกรมหน้าต่าง **SmartTapo.exe** สำหรับตั้งค่าและควบคุม **Capture / Worker** โดยไม่ต้องเปิด CMD สองงานยังทำงานแยก process: Capture ควบคุม MEmu/ADB และเผยแพร่ PNG + ready metadata; Worker วิเคราะห์ ROI เก็บ SQLite/หลักฐาน แจ้งเตือน และ cleanup โดยใช้ local disk เครื่องเดียวกัน ไม่ต้องติดตั้ง PostgreSQL
+
+## เริ่มใช้งานผ่าน GUI — วิธีหลัก
+
+1. ติดตั้ง MEmu/Tapo/ADB และล็อกอิน Tapo ด้วยตัวเองครั้งแรก จากนั้นดับเบิลคลิก **SmartTapo.exe** ไม่ต้องติดตั้ง Python บนเครื่องใช้งาน
+2. เปิดครั้งแรกโปรแกรมสร้าง `%LOCALAPPDATA%\SmartTapo\config.json` และเปิดแท็บ **ตั้งค่า** ให้อัตโนมัติ เลือก `adb.exe`, MEmu.exe ถ้าต้องการให้เปิด emulator, ชื่อกล้อง แล้วกด **ค้นหาอุปกรณ์** เพื่อเลือก Serial
+3. กรอก App Token และ User/Group Key ของ Pushover ในช่องปิดบังข้อความ กดบันทึก คีย์เก็บแยกเป็น `pushover.dat` แบบ **Windows DPAPI current-user** ไม่ใช่ plaintext ใน JSON/command line/log ค่าเริ่มต้นยังไม่ส่งแจ้งเตือนจริง ต้องเปิด checkbox หลังทดลองระบบแล้ว
+4. ไปแท็บ **ภาพช่องว่าง** หยุดงานและตรวจว่าช่องรับไม่มีแบงค์ กด **ถ่ายภาพจาก MEmu** หรือเลือก PNG จาก MEmu ที่มีอยู่ ลากกรอบให้ครอบจุดตรวจ ติ๊กยืนยัน แล้วกดบันทึก ไม่ต้องหาไฟล์ empty หรือรัน calibration command เอง
+5. ไปแท็บ **เริ่ม / หยุด** กดเริ่ม Worker และ Capture ได้จากหน้าต่างเดียว ดูสถานะ process และข้อผิดพลาดด้านล่าง สถานะ process ทำงานไม่ใช่หลักฐานว่ากล้องสด/จำแนกแบงค์ถูกต้อง
+6. ปุ่มหยุด/ปิดหน้าต่างจะขอหยุดงานอย่างปลอดภัยและรอ ADB/งานปัจจุบัน ไม่สั่งปิด MEmu และไม่บังคับ kill งานตามปกติ
+
+กด **เปิดโฟลเดอร์ข้อมูล** เพื่อดูตำแหน่งตั้งค่าและข้อมูล ข้อมูลปกติอยู่ใต้ `%LOCALAPPDATA%\SmartTapo` ไม่อยู่ใน temporary extraction directory ของ PyInstaller
+
+- หากมี `config.local.json` อยู่ข้าง exe ก่อนเปิด จะใช้เป็น **portable config** แทน AppData โดยอ้าง relative paths จากโฟลเดอร์ config นั้น ต้องเขียนโฟลเดอร์ได้
+- คีย์ที่เข้ารหัสผูกกับบัญชี Windows นั้น การย้ายเครื่อง/บัญชีอาจต้องกรอกใหม่ หากอ่านไม่ได้โปรแกรมไม่ลบไฟล์คีย์เดิมอัตโนมัติ มีปุ่มล้างคีย์แยกพร้อมยืนยัน
+- ระหว่างงานทำงานจะล็อกฟอร์มตั้งค่า เปลี่ยนกล้อง/Serial/กรอบ/ภาพอ้างอิงต้องหยุดงานก่อน และการเปลี่ยนอุปกรณ์/geometry จะต้องยืนยัน calibration ให้ตรงชุดใหม่
+- รองรับ screenshot ตามขนาด config (เริ่มต้น 720×1280) ไม่ใช้ภาพเต็มจอ Windows หากเปลี่ยนความละเอียดต้องตั้ง geometry ใหม่ ไม่เดาตำแหน่งช่องรับจากภาพที่ไม่รู้จัก
+- CLI ด้านล่างยังอยู่สำหรับ developer/diagnostics แต่ **ไม่ใช่ขั้นตอนบังคับของผู้ใช้ GUI** artifact รุ่นเก่าที่มี capture.exe/worker.exe อย่างเดียวไม่ใช่รุ่น GUI นี้
 
 ## ข้อจำกัดที่ต้องอ่านก่อน
 
@@ -25,12 +42,18 @@ smart_tapo/
   vision.py         # prototype ROI occupancy
   alignment.py      # bounded registration จากจุดอ้างอิงใกล้ช่องรับ
   runtime.py        # one owner per process/data directory
+  desktop.py        # หน้าต่างตั้งค่า/calibration/control
+  desktop_storage.py # AppData / portable config / Windows DPAPI
+  desktop_controller.py # spawn และ graceful stop สอง process
+  desktop_calibration.py # ผูกการยืนยันภาพกับอุปกรณ์/geometry/hash
 entrypoints/        # จุดเริ่มสำหรับ PyInstaller
 scripts/build-windows.ps1
 tests/
 ```
 
-## 1. เตรียม Windows และ config
+## สำหรับนักพัฒนา: CLI เดิม (ไม่ใช่วิธีใช้งาน GUI)
+
+## 1. เตรียม Windows และ config สำหรับ CLI
 
 ติดตั้ง MEmu, Tapo, ADB และ **Python 3.12** บนเครื่อง build (เครื่องที่รับ exe ไม่ต้องมี Python) เปิด Tapo และ login เองครั้งแรก ไม่เก็บรหัสผ่านใน config
 
@@ -161,25 +184,16 @@ Simulation ใช้ ROI patch สีขาวสมมติบนสำเน�
 .\scripts\build-windows.ps1
 ```
 
-สคริปต์สร้าง venv สำหรับ build ติดตั้งเวอร์ชันที่ pin ไว้ รัน tests แล้วจึงใช้ PyInstaller สร้าง:
+สคริปต์สร้าง venv สำหรับ build ติดตั้งเวอร์ชันที่ pin ไว้ รัน tests แล้วใช้ PyInstaller `--onefile --windowed` สร้าง:
 
 ```text
-dist/capture.exe
-dist/worker.exe
-dist/config.example.json
+dist/SmartTapo.exe
 dist/README.md
 ```
 
-นำทั้งสอง exe, config.local.json และ calibration ที่ตั้งไว้ไปยัง Windows ปลายทาง ติดตั้ง MEmu/ADB แยกและปรับ paths จากนั้นรัน:
+นำ SmartTapo.exe ไปยัง Windows ปลายทาง ติดตั้ง MEmu/ADB แยก แล้วดับเบิลคลิกตั้งค่าผ่านหน้าต่างตามหัวข้อแรก ไม่ต้องมี Python หรือพิมพ์ `--config`
 
-```bat
-worker.exe --config config.local.json
-capture.exe --config config.local.json
-```
-
-หากยังไม่ได้ calibration ใช้ `worker.exe --config config.local.json --calibrate tapo-screen.png --confirm-empty` ได้ ไม่ต้องมี Python บนเครื่องปลายทาง
-
-**สถานะ build:** โค้ดพัฒนาบน macOS ยังไม่ได้สร้าง/ทดสอบ Windows exe หรือเชื่อม MEmu จริง การ build บน Windows อาจถูก antivirus ตรวจไฟล์ one-file จึงต้องตรวจผลจริง ไม่ข้าม tests เพื่อบอกว่าสำเร็จ
+**สถานะ build:** CLI รุ่นเดิมเคย build ผ่านบน Windows Actions แต่ไม่ใช่หลักฐานว่า GUI รุ่นใหม่นี้ผ่าน การ build ใหม่ต้องตรวจ packaged Tk/DPAPI/multiprocessing จริง และ antivirus อาจตรวจไฟล์ one-file ไม่ข้าม tests เพื่อบอกว่าสำเร็จ
 
 ผลทดสอบล่าสุดใน `VERIFICATION.md` ใช้ venv Python 3.12/Pillow 13/NumPy/OpenCV บน Mac แล้ว แต่ยังไม่ใช่ Windows build หรือการทดสอบ MEmu จริง
 
@@ -191,10 +205,10 @@ workflow อยู่ที่ `.github/workflows/build-windows-exe.yml` ใช�
 
 1. เปิด repository → **Actions → Build Windows EXE**
 2. กด **Run workflow** เลือก branch ที่มี workflow แล้วกดรัน (ปุ่ม manual ต้องมี workflow บน default branch ของ repository ก่อน)
-3. เปิด run ที่สำเร็จ → **Artifacts** → ดาวน์โหลด `smart-tapo-windows-x64-<run>-<attempt>`
-4. แตก ZIP จะได้ `capture.exe`, `worker.exe`, `config.example.json`, `README.md`
+3. เปิด run ที่สำเร็จ → **Artifacts** → ดาวน์โหลด `smart-tapo-desktop-windows-x64-<run>-<attempt>`
+4. แตก ZIP จะได้ `SmartTapo.exe`, `README.md` แล้วดับเบิลคลิก exe
 
-ไม่ต้องติดตั้ง Python บนเครื่องที่ดาวน์โหลด exe มาใช้ แต่ยังต้องติดตั้ง MEmu/Tapo/ADB ตั้ง `config.local.json` และยืนยัน calibration ตามขั้นตอนด้านบน `notify_enabled` ยังคงปิดไว้ในตัวอย่าง
+ไม่ต้องติดตั้ง Python บนเครื่องใช้งาน แต่ยังต้องติดตั้ง MEmu/Tapo/ADB ตั้งค่าและยืนยัน calibration ใน GUI `notify_enabled` ยังคงปิดไว้จนผู้ใช้เลือกเปิดเอง
 
 workflow ทำงานอัตโนมัติเมื่อ push ที่เปลี่ยนโค้ด/tests/scripts/dependency/config ตัวอย่าง/README หรือ workflow เองด้วย ไม่ผูกชื่อ branch ว่าต้องเป็น main และยกเลิก build เก่าของ ref เดียวกันเมื่อมี run ใหม่
 
@@ -202,12 +216,12 @@ workflow ทำงานอัตโนมัติเมื่อ push ที�
 
 - Checkout แบบไม่เก็บ credentials ลง working copy, ตั้ง Python และ cache pip dependencies
 - สร้าง venv โดยใช้ interpreter ที่ `setup-python` จัดให้ ตรวจ dependency และรัน unit/integration tests ก่อน build
-- PyInstaller แบบ one-file/console สำหรับสองแอป แล้วตรวจ `--help`
-- รัน **packaged worker.exe จริง** กับภาพ/SQLite ชั่วคราว: calibration → ภาพวัตถุจำลองที่ขยับมุม → aligned ROI → stuck event และ shadow notification ตรวจว่า Pillow/NumPy/OpenCV/DLL ใน bundle ทำงาน ไม่ใช่ทดสอบแค่ parser
-- Upload เฉพาะ exe สองไฟล์, config ตัวอย่างและ README เป็น artifact อายุ **14 วัน** หลัง build/smoke ผ่านเท่านั้น
+- PyInstaller แบบ one-file/windowed สำหรับ SmartTapo.exe
+- รัน **packaged GUI จริง** ใน temporary profile: สร้าง config, สร้าง Tk widgets, calibration ในหน้าต่าง, spawn Worker จนได้ shadow event, spawn Capture กับ path ADB ที่ไม่มีอยู่จริง แล้วหยุดทั้งสอง ตรวจ DPAPI round trip เฉพาะบน Windows โดยไม่เปิดอุปกรณ์จริงหรือใช้คีย์จริง
+- Upload เฉพาะ SmartTapo.exe และ README เป็น artifact อายุ **14 วัน** หลัง build/GUI smoke ผ่านเท่านั้น
 
 ไม่แนบ `config.local.json`, token, `data/`, calibration หรือ screenshot ส่วนตัว ไม่ส่ง Pushover/เปิดกล้องจริง ไม่สร้าง release หรือ deploy ใช้ GitHub token สิทธิ์ `contents: read` เท่านั้น Actions ทั้งสาม pin เป็น commit SHA ของรุ่นทางการ
 
 GitHub-hosted Windows runner อาจใช้ quota/ค่าใช้จ่ายตามบัญชีและ repository ของคุณ artifact ไม่ใช่ signed executable และผล build สำเร็จก็ยังไม่ใช่การทดสอบกับกล้อง/MEmu หน้างาน
 
-**สถานะตอนเพิ่ม workflow:** ตรวจ YAML และ smoke logic บน Mac ได้ แต่ยังไม่ push หรือรัน GitHub Actions จริง ต้องตรวจผล Windows run แรกก่อนเรียกว่าได้ exe พร้อมใช้
+**สถานะ GUI ณ พัฒนา:** รุ่น CLI ก่อนหน้าเคยผ่าน Actions แล้ว ส่วน GUI ใน branch นี้ยังต้องผ่าน Windows run ใหม่ อย่าสับสน artifact CLI เดิมกับ desktop artifact

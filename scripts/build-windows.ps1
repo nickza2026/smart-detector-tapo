@@ -20,12 +20,8 @@ $Python = Join-Path (Get-Location) ".venv-build\Scripts\python.exe"
 Run-Checked -Program $Python -Arguments @("-m", "pip", "install", "-r", "requirements-build.txt")
 Run-Checked -Program $Python -Arguments @("-m", "pip", "check")
 Run-Checked -Program $Python -Arguments @("-m", "unittest", "discover", "-s", "tests", "-v")
-foreach ($App in @("capture", "worker")) {
-    Run-Checked -Program $Python -Arguments @("-m", "PyInstaller", "--noconfirm", "--clean", "--onefile", "--console", "--paths", ".", "--name", $App, "entrypoints/$App.py")
-    Run-Checked -Program (Join-Path (Get-Location) "dist/$App.exe") -Arguments @("--help")
-}
+Run-Checked -Program $Python -Arguments @("-m", "PyInstaller", "--noconfirm", "--clean", "--onefile", "--windowed", "--paths", ".", "--name", "SmartTapo", "entrypoints/desktop.py")
 Run-Checked -Program $Python -Arguments @("-m", "scripts.smoke_packaged", "--dist", "dist")
-Copy-Item "config.example.json" "dist/config.example.json" -Force
 Copy-Item "README.md" "dist/README.md" -Force
-Write-Host "Built capture.exe and worker.exe in dist. ADB and MEmu must be installed separately."
+Write-Host "Built windowed SmartTapo.exe in dist. Double-click it for first-run setup. ADB and MEmu must be installed separately."
 Write-Host "No camera or Pushover was contacted by this build. Live Windows integration still requires operator testing."
