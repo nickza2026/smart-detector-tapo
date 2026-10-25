@@ -1,0 +1,4 @@
+# Runtime/build target: Python 3.12 (NumPy 2.5 requires >=3.12).
+Pillow==13.0.0
+numpy==2.5.4
+opencv-python-headless==5.0.0.93

@@ -1,0 +1,62 @@
+name: Build Windows EXE
+
+'on':
+  workflow_dispatch:
+  push:
+    paths:
+      - 'smart_tapo/**'
+      - 'entrypoints/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'requirements*.txt'
+      - 'pyproject.toml'
+      - 'config.example.json'
+      - 'README.md'
+      - '.github/workflows/build-windows-exe.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-exe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Windows x64 / Python 3.12
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+          architecture: x64
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-build.txt
+
+      - name: Test, build and smoke-test executables
+        run: .\scripts\build-windows.ps1 -PythonExecutable (Get-Command python).Source
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: smart-tapo-windows-x64-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            dist/capture.exe
+            dist/worker.exe
+            dist/config.example.json
+            dist/README.md
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smart-tapo"
+version = "0.1.0"
+description = "Local MEmu capture and visual-occupancy worker prototype"
+requires-python = ">=3.12"
+dependencies = ["Pillow==13.0.0", "numpy==2.5.4", "opencv-python-headless==5.0.0.93"]
+
+[project.scripts]
+smart-tapo-capture = "smart_tapo.capture.__main__:main"
+smart-tapo-worker = "smart_tapo.worker.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["smart_tapo*"]

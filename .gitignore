@@ -1,0 +1,19 @@
+.venv/
+.tools/
+.venv-build/
+*.egg-info/
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+data/
+calibration/
+config.local.json
+.env
+.env.*
+.agents/
+.letta/
+tapo-screen*.png
+# Original supplied draft is local-only; current reviewed plans are versioned.
+plan.md
