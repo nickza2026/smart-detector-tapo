@@ -17,3 +17,6 @@ config.local.json
 tapo-screen*.png
 # Original supplied draft is local-only; current reviewed plans are versioned.
 plan.md
+pushover.dat
+calibration-state.json
+desktop.lock

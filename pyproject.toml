@@ -13,5 +13,8 @@ dependencies = ["Pillow==13.0.0", "numpy==2.5.4", "opencv-python-headless==5.0.0
 smart-tapo-capture = "smart_tapo.capture.__main__:main"
 smart-tapo-worker = "smart_tapo.worker.__main__:main"
 
+[project.gui-scripts]
+smart-tapo = "smart_tapo.desktop:main"
+
 [tool.setuptools.packages.find]
 include = ["smart_tapo*"]

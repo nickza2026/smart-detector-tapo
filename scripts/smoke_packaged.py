@@ -80,10 +80,24 @@ def main():
     if os.name != 'nt':
         parser.error('Run Windows executables on Windows; no cross-platform execution is implied')
     dist = args.dist.resolve()
-    for name in ('capture.exe', 'worker.exe'):
-        if not (dist / name).is_file():
-            parser.error('Missing packaged executable: ' + name)
-    print(json.dumps(smoke([str(dist / 'capture.exe')], [str(dist / 'worker.exe')]), indent=2))
+    executable = dist / 'SmartTapo.exe'
+    if not executable.is_file():
+        parser.error('Missing packaged desktop executable: SmartTapo.exe')
+    with tempfile.TemporaryDirectory(prefix='smart-tapo-gui-report-') as directory:
+        report = Path(directory) / 'report.json'
+        result = subprocess.run([str(executable), '--smoke-report', str(report)],
+                                capture_output=True, text=True, timeout=150, check=False)
+        if result.returncode or not report.is_file():
+            raise RuntimeError('Packaged GUI failed or did not produce its smoke report')
+        data = json.loads(report.read_text(encoding='utf-8'))
+        for key in ('gui_created', 'auto_config_created', 'worker_stopped',
+                    'shadow_notification', 'calibration_ready', 'windows_dpapi_roundtrip',
+                    'capture_process_started'):
+            if data.get(key) is not True:
+                raise RuntimeError('Packaged GUI did not verify: ' + key)
+        if data.get('real_notifications') != 0:
+            raise RuntimeError('GUI smoke must not use live notifications')
+        print(json.dumps(data, indent=2))
 
 
 if __name__ == '__main__':

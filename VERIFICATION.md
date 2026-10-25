@@ -1,5 +1,33 @@
 # หลักฐานการตรวจต้นแบบ
 
+## ล่าสุด: Desktop GUI แทนการบังคับเปิด CMD
+
+เพิ่ม entrypoint `SmartTapo.exe` แบบ `--onefile --windowed`, Tk GUI สามแท็บ ตั้งค่า/ภาพช่องว่าง/เริ่มหยุด ไม่บังคับ `--config` ในการใช้งานปกติ ส่วน CLI เดิมเก็บสำหรับ developer เท่านั้น
+
+หลักฐานการตรวจรุ่น GUI แยกจาก CLI:
+
+- ชุดสุดท้าย **54 distinct tests ผ่าน** พร้อม `compileall`, `pip check`, `git diff --check` บน Mac ครอบคลุม first-run, credential preservation, calibration guard, process ownership, graceful stop และ window-failure cleanup
+- Native Tk บน Mac คือ **9.0.4** เปิดหน้าต่างและสร้าง widgets จริงได้
+- first-run สร้าง config ใน temporary profile, บันทึกฟอร์ม, เลือกภาพช่องว่าง/กรอบและผูก manifest, spawn Worker จนได้ shadow event, เริ่ม Capture ด้วย path ADB ที่จงใจไม่มีอยู่จริง และหยุด process ทั้งคู่ได้ ไม่มีการติดต่อกล้อง/ADB จริงหรือส่ง Pushover
+- ผ่านการแพ็ก **macOS windowed application ด้วย PyInstaller 6.22.3** และรัน smoke ผ่านตัว frozen `.app` จริง ไม่ใช่เฉพาะ `python -m` ตรวจผล `gui_created`, `auto_config_created`, `capture_process_started`, `worker_stopped`, `shadow_notification`, `calibration_ready` เป็น true และ `real_notifications` เป็น 0
+- เปลี่ยน workflow whitelist ให้มีเฉพาะ `SmartTapo.exe` กับ README; YAML/permissions/SHA pins/รายการไฟล์ตรวจผ่านบน Mac ไม่รวม config/คีย์/ภาพส่วนตัว
+- Config ผิด/คีย์อ่านไม่ได้ไม่ถูกลบเอง ไม่มี plaintext fallback ของ credentials บน Mac ทดสอบการเข้ารหัสโดย injected test cipher เท่านั้น; implementation จริงบน Windows ใช้ current-user DPAPI
+- จับคู่ calibration กับ camera/Serial/geometry/hash ป้องกันการใช้ภาพอ้างอิงผิดชุดเมื่อ save ขาดช่วง เปลี่ยน geometry หรือภาพภายหลัง และไม่ยอมตั้งภาพที่ไม่มี static anchors เป็นภาพพร้อมใช้งาน
+- ช่องส่งเตือน/ตั้งค่าถูกล็อกระหว่างทำงาน หยุดด้วย shared Event และมี cleanup ทั้งเส้นทางปิดปกติ/GUI failure ไม่มีการ terminate production jobs ตามปกติ
+
+คำสั่งตรวจสำหรับ developer:
+
+```text
+.venv/bin/python -m unittest discover -s tests -q
+.venv/bin/python -m smart_tapo.desktop --smoke-report /tmp/smart-tapo-gui-smoke.json
+.venv/bin/python -m PyInstaller --noconfirm --onefile --windowed --paths . --name SmartTapo entrypoints/desktop.py
+dist/SmartTapo.app/Contents/MacOS/SmartTapo --smoke-report /tmp/smart-tapo-frozen-macos-smoke.json
+```
+
+**ไม่ใช่หลักฐาน Windows GUI ผ่าน:** Windows DPAPI จริง, frozen Windows GUI/multiprocessing, antivirus/DPI/layout และ MEmu หน้างานยังต้องตรวจบน Windows รุ่น GUI นี้ไม่ได้ commit/push ณ การพัฒนา จึงไม่มี Windows GUI artifact ใหม่ให้ดาวน์โหลดจาก run เดิม
+
+สคริปต์ Windows เตรียมทดสอบ packaged GUI ใน temporary profile รวม DPAPI round-trip ไว้แล้ว แต่ต้องรัน Actions หลังผู้ใช้อนุญาตเผยแพร่ การเคย build CLI ผ่านที่ commit `fb7da47` ไม่ทดแทนการตรวจ GUI รอบใหม่
+
 ## ล่าสุด: GitHub Actions สำหรับ Windows EXE
 
 เพิ่ม `.github/workflows/build-windows-exe.yml` สำหรับ Windows 2022/x64/Python 3.12 และต่อกับสคริปต์ build เดิม Actions checkout/setup-python/upload-artifact pin ด้วย SHA ของรุ่นทางการที่ตรวจ metadata แล้ว ไม่ได้รันบน GitHub ณ การตรวจนี้
