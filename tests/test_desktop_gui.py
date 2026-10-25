@@ -92,7 +92,7 @@ class DesktopGuiTests(unittest.TestCase):
         with patch.object(self.store,'save_credentials') as saved:
             self.assertTrue(self.app.save_settings())
             saved.assert_called_once_with('synthetic-private-token','synthetic-private-user')
-        self.assertNotIn('synthetic-private',self.store.config_path.read_text())
+        self.assertNotIn('synthetic-private',self.store.config_path.read_text(encoding='utf-8'))
 
     def test_selection_stays_in_video_and_requires_confirmation_again(self):
         self.calibrate()

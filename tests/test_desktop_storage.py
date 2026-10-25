@@ -25,7 +25,7 @@ class DesktopStorageTests(unittest.TestCase):
         self.assertEqual(loaded.camera_id, 'other')
         self.assertEqual(loaded.data_dir, self.store.root / 'relative')
         self.assertEqual(loaded.roi, config.roi)
-        self.assertNotIn('token', json.loads(self.store.config_path.read_text()))
+        self.assertNotIn('token', json.loads(self.store.config_path.read_text(encoding='utf-8')))
 
     def test_invalid_preserved_and_safe_error(self):
         self.store.root.mkdir()
