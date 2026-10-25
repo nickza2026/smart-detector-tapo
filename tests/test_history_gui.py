@@ -22,7 +22,7 @@ class HistoryGuiTests(unittest.TestCase):
         self.store=DesktopStore(Path(self.temp.name)/'config.json')
         self.controller=FakeController()
         self.app=DesktopApp(self.root,self.store,self.controller)
-        self.addCleanup(self.root.after_cancel,self.app.timer)
+        self.addCleanup(lambda:self.root.after_cancel(self.app.timer))
         self.panel=self.app.history_panel
         self.addCleanup(self.panel.close)
         self.errors=self.enterContext(patch('smart_tapo.desktop.messagebox.showerror'))
@@ -89,11 +89,21 @@ class HistoryGuiTests(unittest.TestCase):
         self.root.geometry('850x650')
         self.app.notebook.select(self.panel)
         self.root.deiconify()
-        self.root.update_idletasks()
         status_label=self.panel.winfo_children()[-1]
-        self.assertGreater(status_label.winfo_height(),1)
-        self.assertLessEqual(status_label.winfo_y()+status_label.winfo_height(),self.panel.winfo_height())
-        self.assertGreater(self.panel.tree.winfo_height(),40)
+        deadline=time.monotonic()+3
+        # Win32 Map/Configure notifications require the native event pump,
+        # not just Tk's idle layout queue on a previously withdrawn window.
+        while time.monotonic()<deadline:
+            self.root.update()
+            if self.panel.winfo_ismapped() and status_label.winfo_height()>1:
+                break
+            time.sleep(.01)
+        geometry={'root':self.root.winfo_geometry(),'panel':self.panel.winfo_geometry(),
+                  'status':status_label.winfo_geometry(),'table':self.panel.tree.winfo_geometry()}
+        self.assertTrue(self.panel.winfo_ismapped(),geometry)
+        self.assertGreater(status_label.winfo_height(),1,geometry)
+        self.assertLessEqual(status_label.winfo_y()+status_label.winfo_height(),self.panel.winfo_height(),geometry)
+        self.assertGreater(self.panel.tree.winfo_height(),40,geometry)
 
     def test_full_frame_viewer_opens_png_and_does_not_leave_previous_image_on_missing_event(self):
         fixture=reader_fixture.HistoryReaderTests('test_empty_history_never_creates_database_or_directory')
