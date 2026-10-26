@@ -5,21 +5,16 @@ import queue
 import threading
 import time
 import webbrowser
-from datetime import datetime
 from tkinter import Toplevel, ttk, StringVar, messagebox
 
 from PIL import Image, ImageTk
 
-from .history import IMAGE_LABELS, KIND_LABELS, get_images, list_events
+from .history import EMERGENCY_LABELS, IMAGE_LABELS, KIND_LABELS, get_images, list_events
+from .time_display import thai_time
 
 
 def local_time(value):
-    if value is None:
-        return '—'
-    try:
-        return datetime.fromtimestamp(value).astimezone().strftime('%d/%m/%Y %H:%M:%S')
-    except (ValueError, TypeError, OverflowError, OSError):
-        return '—'
+    return thai_time(value)
 
 
 class HistoryPanel(ttk.Frame):
@@ -63,7 +58,7 @@ class HistoryPanel(ttk.Frame):
         table = ttk.Frame(self)
         table.grid(row=5,column=0,sticky='nsew',pady=8)
         self.tree = ttk.Treeview(table, columns=('started','last','kind','images'), show='headings', height=7)
-        for key, text, width in (('started','เวลาเริ่ม (ล่าสุดก่อน)',170),('last','เวลาที่เห็นล่าสุด',170),
+        for key, text, width in (('started','เริ่มพบ (UTC+7)',170),('last','พบล่าสุด (UTC+7)',170),
                                  ('kind','สถานะจากภาพ',230),('images','ภาพหลักฐาน',90)):
             self.tree.heading(key, text=text)
             self.tree.column(key, width=width, minwidth=70, stretch=key=='kind')
@@ -72,6 +67,7 @@ class HistoryPanel(ttk.Frame):
         scroll.pack(side='right', fill='y')
         self.tree.configure(yscrollcommand=scroll.set)
         self.tree.bind('<Double-1>', self.show_images)
+        self.tree.bind('<<TreeviewSelect>>',self._selected_status)
         actions = ttk.Frame(self)
         actions.grid(row=6,column=0,sticky='ew')
         ttk.Button(actions, text='รีเฟรช / กลับรายการล่าสุด', command=self.refresh).pack(side='left')
@@ -118,7 +114,7 @@ class HistoryPanel(ttk.Frame):
             return
         config = self.config_provider()
         scope = (config.data_dir, config.camera_id, config.deposit_history_hours)
-        self.retention.set('เวลาตามเครื่อง • รายการและภาพเหตุการณ์ปกติเก็บ '
+        self.retention.set('เวลาไทย UTC+7 จากเวลาที่เครื่องรับภาพ (ไม่ใช่เวลา OSD กล้อง) • ประวัติปกติเก็บ '
                            + str(config.deposit_history_hours) + ' ชั่วโมงหลังจบ; ภาพทั่วไปวนลบ '
                            + str(config.rolling_frames_minutes) + ' นาที')
         if scope != self.scope:
@@ -156,7 +152,8 @@ class HistoryPanel(ttk.Frame):
             self.tree.delete(*self.tree.get_children())
             for event in page.events:
                 self.tree.insert('', 'end', iid=event.id, values=(local_time(event.started),
-                    local_time(event.last_present), KIND_LABELS.get(event.kind,'ไม่ทราบสถานะ'), event.image_count))
+                    local_time(event.last_present), KIND_LABELS.get(event.kind,'ไม่ทราบสถานะ')+
+                    (' | '+EMERGENCY_LABELS[event.emergency_state] if event.emergency_state in EMERGENCY_LABELS else ''), event.image_count))
             if selection and selection[0] in rows:
                 self.tree.selection_set(selection[0])
             self.rows = rows
@@ -165,6 +162,12 @@ class HistoryPanel(ttk.Frame):
         self.next_button.configure(state='normal' if self.next_before else 'disabled')
         self.status.set(('ยังไม่มีประวัติ — ต้องให้ Worker ตรวจพบวัตถุก่อน' if not rows else
                          'หน้า '+str(len(self.cursors))+' • '+str(len(rows))+' รายการ • ดับเบิลคลิกเพื่อดูภาพ'))
+        self._selected_status()
+
+    def _selected_status(self,event=None):
+        selected=self.tree.selection()
+        row=self.rows.get(selected[0]) if selected else None
+        if row and row.emergency_state in EMERGENCY_LABELS:self.status.set(EMERGENCY_LABELS[row.emergency_state])
 
     def show_images(self, event=None):
         selected = self.tree.selection()
@@ -188,6 +191,8 @@ class HistoryPanel(ttk.Frame):
         outer = ttk.Frame(self.viewer,padding=12)
         outer.pack(fill='both',expand=True)
         event = self.rows.get(event_id)
+        if event and event.emergency_state in EMERGENCY_LABELS:
+            ttk.Label(outer,text=EMERGENCY_LABELS[event.emergency_state],wraplength=740).pack(anchor='w')
         ttk.Label(outer,text='เวลาเริ่ม: '+local_time(event.started if event else None)+
                   ' • เป็นหลักฐานภาพ ไม่ยืนยันการรับเงิน',wraplength=760).pack(anchor='w')
         picker = ttk.Combobox(outer,state='readonly',values=[IMAGE_LABELS[image.role] for image in images])

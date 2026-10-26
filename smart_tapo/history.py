@@ -22,6 +22,7 @@ class HistoryEvent:
     first_clear: float | None
     closed: float | None
     image_count: int
+    emergency_state: str = ''
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,26 @@ KIND_LABELS = {'candidate': 'กำลังพบวัตถุ', 'normal_visu
                'stuck': 'ค้าง — ถึงเกณฑ์', 'incomplete': 'ข้อมูลไม่ครบ / ยืนยันไม่ได้'}
 IMAGE_LABELS = {'first_full': 'ภาพเต็มเมื่อเริ่มพบ', 'first': 'กรอบตรวจแรก (จัดแนวแล้ว)',
                 'threshold': 'กรอบเมื่อถึงเกณฑ์ค้าง', 'clear': 'กรอบว่างเมื่อจบเหตุการณ์'}
+EMERGENCY_LABELS = {'sending':'Emergency: กำลังส่ง ยังไม่ยืนยัน',
+    'active':'Emergency: รอรับทราบ',
+    'acknowledged':'Emergency: รับทราบแล้ว (ไม่ใช่การยืนยันว่าแบงค์ออก)',
+    'expired':'Emergency: หมดอายุ ไม่ถือว่ารับทราบ',
+    'cancel_pending':'Emergency: ยังไม่ยืนยันยกเลิก อาจเตือนต่อ',
+    'cancelled':'Emergency: ยกเลิกแล้ว',
+    'ambiguous':'Emergency: ผลส่งไม่แน่ชัด ระงับส่งใหม่เพื่อป้องกันซ้ำ',
+    'failed':'Emergency: ส่งไม่สำเร็จ', 'shadow':'Emergency: ทดสอบ ไม่ส่งจริง'}
+
+
+def _emergency_column(db):
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='emergency_notifications'").fetchone():
+        return '(SELECT n.state FROM emergency_notifications n WHERE n.event=e.id ORDER BY n.created DESC,n.id DESC LIMIT 1) AS emergency_state, '
+    return "'' AS emergency_state, "
+
+
+def _event(row):
+    values=dict(row)
+    if values.get('emergency_state') not in EMERGENCY_LABELS:values['emergency_state']=''
+    return HistoryEvent(**values)
 
 
 def _eligible(config, now):
@@ -93,10 +114,10 @@ def list_events(config, before=None, limit=100, now=None):
             where += ' AND (e.started < ? OR (e.started = ? AND e.id < ?))'
             values.extend((before[0], before[0], before[1]))
         values.append(limit + 1)
-        rows = db.execute('SELECT e.id,e.kind,e.started,e.last_present,e.first_clear,e.closed,'
+        rows = db.execute('SELECT e.id,e.kind,e.started,e.last_present,e.first_clear,e.closed,'+_emergency_column(db)+
                           '(SELECT count(*) FROM evidence v WHERE v.event=e.id) AS image_count '
                           'FROM events e WHERE ' + where + ' ORDER BY e.started DESC,e.id DESC LIMIT ?', values).fetchall()
-        events = tuple(HistoryEvent(**dict(row)) for row in rows[:limit])
+        events = tuple(_event(row) for row in rows[:limit])
         cursor = (events[-1].started, events[-1].id) if len(rows) > limit else None
         return HistoryPage(events, cursor)
 
@@ -108,11 +129,11 @@ def get_event(config, event_id, now=None):
     with _database(config) as db:
         if db is None:
             return None
-        row = db.execute('SELECT e.id,e.kind,e.started,e.last_present,e.first_clear,e.closed,'
+        row = db.execute('SELECT e.id,e.kind,e.started,e.last_present,e.first_clear,e.closed,'+_emergency_column(db)+
                          '(SELECT count(*) FROM evidence v WHERE v.event=e.id) AS image_count '
                          "FROM events e WHERE e.id=? AND (e.kind!='normal_visual' OR e.closed>=?)",
                          (event_id, _eligible(config, now))).fetchone()
-        return HistoryEvent(**dict(row)) if row else None
+        return _event(row) if row else None
 
 
 def _safe_image(config, event_id, role, value):

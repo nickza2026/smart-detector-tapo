@@ -93,7 +93,7 @@ def main():
         for key in ('gui_created', 'auto_config_created', 'worker_stopped',
                     'shadow_notification', 'calibration_ready', 'windows_dpapi_roundtrip',
                     'capture_process_started','history_menu_created','history_event_visible',
-                    'history_full_image','history_web_served'):
+                    'history_full_image','history_web_served','emergency_shadow','thai_time'):
             if data.get(key) is not True:
                 raise RuntimeError('Packaged GUI did not verify: ' + key)
         if data.get('real_notifications') != 0:

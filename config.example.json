@@ -1,4 +1,8 @@
 {
+  "notification_priority": 1,
+  "emergency_retry_seconds": 60,
+  "emergency_expire_seconds": 10800,
+  "emergency_poll_seconds": 10,
   "history_web_port": 8080,
   "camera_id": "cabinet-1",
   "data_dir": "data",

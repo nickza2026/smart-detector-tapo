@@ -1,7 +1,7 @@
 """Single-writer visual occupancy history and notification worker.
 
 PRESENT is only a candidate object, not a verified banknote classification.
-Emergency receipts and acknowledgement are intentionally unsupported.
+Emergency acknowledgement is independent of visual occupancy.
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from urllib import parse, request
 from PIL import Image
 
 from smart_tapo.frames import atomic_bytes, read_frame
+from smart_tapo.emergency import EmergencyManager
 
 LOG = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ def pushover_send(message):
 
 
 class Worker:
-    def __init__(self, config, detector=None, sender=None, clock=time.time):
+    def __init__(self, config, detector=None, sender=None, clock=time.time, emergency_client=None):
         self.config = config
         self.clock = clock
         if detector is None:
@@ -86,6 +87,7 @@ class Worker:
         self.view_anchor = None
         self.executor = ThreadPoolExecutor(max_workers=1)
         self.pending = None
+        self.emergency = EmergencyManager(self.db, config, self.executor, clock, emergency_client)
         self.last_cleanup = float('-inf')
 
     def active(self):
@@ -120,6 +122,7 @@ class Worker:
         self.db.execute('INSERT INTO evidence VALUES(?,?,?)', (event, role, str(path)))
 
     def drain(self, wait=False):
+        self.emergency.config = self.config
         if self.pending is None:
             return
         future, notification, event = self.pending
@@ -142,6 +145,7 @@ class Worker:
 
     def process(self, frame, image, marker):
         self.drain()
+        self.emergency.service(busy=self.pending is not None)
         if self.db.execute('SELECT 1 FROM frames WHERE id=?', (frame.frame_id,)).fetchone():
             return False
         now = self.clock()
@@ -182,6 +186,7 @@ class Worker:
         self.live_count = self.live_count + 1 if live and valid and label == 'PRESENT' else 0
         self.previous = frame
         send = None
+        emergency_event = None
         with self.db:
             self.db.execute('INSERT INTO frames VALUES(?,?,?,?)', (frame.frame_id, frame.captured_at, str(marker), str(image)))
             event = self.active()
@@ -217,8 +222,16 @@ class Worker:
                     self.db.execute("UPDATE events SET kind='stuck' WHERE id=?", (event['id'],))
                     self.snapshot(event['id'], 'threshold', image, observation)
                     due = event['last_success'] is None or now - event['last_success'] >= max(60, self.config.reminder_interval_seconds)
-                    if (self.live_count >= self.config.stuck_consecutive_frames and due
-                            and now >= event['retry_at'] and self.pending is None):
+                    priority_two = getattr(self.config, 'notification_priority', 1) == 2
+                    ready = (self.live_count >= self.config.stuck_consecutive_frames
+                             and self.pending is None and self.emergency.pending is None)
+                    if ready and priority_two and not self.emergency.blocked(event['id']):
+                        legacy = self.db.execute("SELECT 1 FROM notifications WHERE status IN ('pending','ambiguous') LIMIT 1").fetchone()
+                        if not legacy:
+                            emergency_event = event['id']
+                    if (ready and not priority_two and due
+                            and not self.emergency.blocked(event['id'])
+                            and now >= event['retry_at']):
                         notification = uuid.uuid4().hex
                         status = 'pending' if self.config.notify_enabled else 'shadow'
                         self.db.execute('INSERT INTO notifications VALUES(?,?,?,?)', (notification, event['id'], now, status))
@@ -226,12 +239,16 @@ class Worker:
                             self.db.execute('UPDATE events SET last_success=? WHERE id=?', (now, event['id']))
                         else:
                             send = (notification, event['id'])
+        if emergency_event:
+            self.emergency.start(emergency_event, 'Suspected banknote/object stuck: ' + self.config.camera_id)
+        self.emergency.service(busy=self.pending is not None or send is not None)
         if send:
             self.pending = (self.executor.submit(self.sender, 'Suspected banknote/object stuck: ' + self.config.camera_id), *send)
         return True
 
     def scan(self):
         self.drain()
+        self.emergency.service(busy=self.pending is not None)
         frames = []
         for marker in (self.config.data_dir / 'frames' / self.config.camera_id).glob('*.ready.json'):
             identity = marker.name[:-len('.ready.json')]
@@ -276,7 +293,8 @@ class Worker:
             self.db.execute('DELETE FROM frames WHERE image IS NULL AND captured<?', (now - self.config.event_history_days * 86400,))
             for event in self.db.execute('SELECT * FROM events WHERE closed IS NOT NULL').fetchall():
                 pending = self.db.execute("SELECT 1 FROM notifications WHERE event=? AND status IN ('pending','failed','ambiguous')", (event['id'],)).fetchone()
-                if pending:
+                emergency_pending = self.db.execute("SELECT 1 FROM emergency_notifications WHERE event=? AND state IN ('sending','active','cancel_pending','ambiguous')", (event['id'],)).fetchone()
+                if pending or emergency_pending:
                     continue
                 normal = event['kind'] == 'normal_visual'
                 ttl = (self.config.deposit_history_hours * 3600 if normal else
@@ -288,10 +306,12 @@ class Worker:
                             self.db.execute('DELETE FROM evidence WHERE event=? AND role=?', (event['id'], row['role']))
                 history_ttl = ttl if normal else self.config.event_history_days * 86400
                 if now - event['closed'] > history_ttl and not self.db.execute('SELECT 1 FROM evidence WHERE event=?', (event['id'],)).fetchone():
+                    self.db.execute('DELETE FROM emergency_notifications WHERE event=?', (event['id'],))
                     self.db.execute('DELETE FROM notifications WHERE event=?', (event['id'],))
                     self.db.execute('DELETE FROM events WHERE id=?', (event['id'],))
 
     def close(self):
         self.drain(wait=True)
+        self.emergency.drain(wait=True)
         self.executor.shutdown(wait=True)
         self.db.close()
