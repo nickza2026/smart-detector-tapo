@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
 import os
 import re
@@ -12,7 +13,7 @@ import xml.etree.ElementTree as ET
 
 from PIL import Image
 
-from smart_tapo.frames import image_storage_bytes, publish_frame
+from smart_tapo.frames import atomic_bytes, image_storage_bytes, publish_frame
 from smart_tapo.runtime import hidden_console_options
 
 LOG = logging.getLogger(__name__)
@@ -158,6 +159,8 @@ def capture(config, stop, once=False, adb=None, monotonic=time.monotonic):
     adb = adb or Adb(config)
     session = uuid.uuid4().hex
     sequence, previous, connected = 0, None, False
+    frames = fresh_frames = skipped_slots = 0
+    last_captured_monotonic = None
     last_ui_check = float('-inf')
     target = monotonic()
     while not stop.is_set():
@@ -165,6 +168,7 @@ def capture(config, stop, once=False, adb=None, monotonic=time.monotonic):
             break
         now = monotonic()
         missed = max(0, int((now - target) // config.capture_interval_seconds))
+        skipped_slots += missed
         sequence += missed + 1
         target += (missed + 1) * config.capture_interval_seconds
         try:
@@ -184,6 +188,22 @@ def capture(config, stop, once=False, adb=None, monotonic=time.monotonic):
             clock = decode_clock(png, config)
             fresh = previous is not None and clock != previous
             previous = clock
+            frames += 1
+            fresh_frames += int(fresh)
+            last_interval = (None if last_captured_monotonic is None else
+                             captured_monotonic - last_captured_monotonic)
+            last_captured_monotonic = captured_monotonic
+            # Diagnostic failures never participate in capture recovery or scheduling.
+            try:
+                atomic_bytes(config.data_dir / 'capture_status.json', json.dumps({
+                    'target_interval_seconds': config.capture_interval_seconds,
+                    'last_interval_seconds': last_interval,
+                    'cycle_seconds': captured_monotonic - now,
+                    'frames': frames, 'fresh_frames': fresh_frames,
+                    'skipped_slots': skipped_slots, 'captured_at': captured_at,
+                }, allow_nan=False).encode('ascii'))
+            except Exception:
+                LOG.warning('Capture diagnostics unavailable')
             if image_storage_bytes(config) + len(png) > config.max_image_storage_mb * 1_000_000:
                 LOG.warning('Image quota full; publishing paused, pending frames retained')
             else:

@@ -1,6 +1,19 @@
 # หลักฐานการตรวจต้นแบบ
 
-## ล่าสุด: ประวัติการหยอดแบงค์และเว็บ localhost (ยังไม่เผยแพร่)
+## ชุดพัฒนา Emergency / เวลาไทย / capture diagnostics — ยังไม่เผยแพร่
+
+- Snapshot สุดท้ายตรวจชุดรวม 121 tests บน macOS ผ่าน 120 ข้อ/ข้าม Windows-only 1 ข้อ พร้อม source และ PyInstaller windowed macOS smoke ผ่าน `emergency_shadow`, `thai_time`, history/full-image/web/process flags ทุกตัวและ `real_notifications=0`; HTTP regression ยืนยันเวลาไทย/ACK และไม่เผยแพร่ receipt/tag ไม่อ้างแทน Windows รุ่นนี้
+- API จำลองตรวจ payload priority2/retry/expire/tag, receipt polling และ cancellation; ไม่มี live Pushover/ADB หรือภาพจริงใน fixtures
+- คง default High เพื่อไม่อัปเกรด config เก่าเป็น Emergency เงียบ ๆ เพิ่ม GUI แยกแท็บ เลือก/บันทึก/validate ค่า และล็อกแก้ไขเมื่อ process ทำงาน
+- Durable single writer: commit sending ก่อนส่ง, กู้ active receipt หลังเปิด SQLite ใหม่, ACK ไม่ปิดเหตุทางภาพ, failed poll ไม่เป็น ack, clear-before-send-result รอ receipt แล้ว cancel, pending cancel/ambiguity ปกป้องหลักฐาน, shadow-to-live ไม่ถือว่าทดสอบคือส่งจริง
+- อ่านประวัติ DB เก่าที่ไม่มี emergency table ได้ แสดงสถานะโดยไม่เปิดเผย receipt/tag และไม่เขียน schema จาก reader; เพิ่ม index event/time ของ Emergency
+- เวลาไทย fixed UTC+7 ทดสอบเมื่อ host TZ เป็น UTC/Honolulu/Tokyo โดยไม่เปลี่ยน Unix timestamp หรือนโยบาย retention
+- Telemetry ใช้ monotonic spacing ไม่มี ADB request/clock-call เพิ่มใน scheduler ไม่เปลี่ยน freshness/label/threshold มีเฉพาะตัวเลขและการอ่าน/ข้อความแบบ whitelist ไม่อ้างว่าทดสอบ recall หน้างานแล้ว
+- ตรวจ source GUI smoke เปิด Worker/Capture แบบสังเคราะห์, priority2 shadow, history/image/web เวลาไทย โดยต้อง `real_notifications=0`; Windows binary รุ่นใหม่นี้ยังต้องรอ CI หลังอนุญาต push
+
+## v0.2.0: ประวัติการหยอดแบงค์และเว็บ localhost (เผยแพร่แล้ว)
+
+- หลังช่วงพัฒนาเดิม Windows main [run 40215836113](https://github.com/nickza2026/smart-detector-tapo/actions/runs/40215836113) ผ่าน และเผยแพร่ [v0.2.0 GUI Preview](https://github.com/nickza2026/smart-detector-tapo/releases/tag/v0.2.0) จาก main `6f325c4`; หลักฐานด้านล่างเป็น snapshot ขณะพัฒนา ไม่ใช่การยืนยัน Emergency ของชุดใหม่บน Windows
 
 - Snapshot สุดท้าย: 90 tests รันบน Mac ผ่าน 89 ข้อ ข้าม Windows console API 1 ข้อ; source และ frozen windowed macOS smoke ผ่านทุก flag รวมประวัติ/ภาพเต็ม/เว็บ พร้อม `pip check` และ `git diff --check` ผ่าน ตรวจ native viewer เปิด PNG และปุ่มประวัติพอดีหน้าต่างขั้นต่ำ 850×650 แล้วบน Mac
 - เพิ่ม GUI ประวัติเรียงเวลาเริ่มล่าสุดก่อน แบ่งหน้าละไม่เกิน 100 รายการ และดูภาพในโปรแกรมได้ ใช้ SQLite reader แบบ read-only ตรวจเจ้าของกล้องและเส้นทางภาพ ไม่เปิดฐานข้อมูลว่างขึ้นมาเอง

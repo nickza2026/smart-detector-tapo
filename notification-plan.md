@@ -1,6 +1,8 @@
 # แผนแจ้งเตือน Pushover และการรับทราบ
 
-สถานะ: ต้นแบบ implement priority-1 worker reminder และ shadow mode แล้ว ยังไม่เรียก Pushover จริง ไม่มี Emergency receipt/acknowledgement implementation; ต้องตกลงพฤติกรรมก่อนทำโหมดนั้น ดู source/ข้อจำกัดใน `README.md` และผลตรวจใน `VERIFICATION.md`
+สถานะชุดพัฒนา: เพิ่มตัวเลือก priority-2 Emergency พร้อม receipt/ack/cancel แบบ polling และ durable recovery แล้ว ทดสอบ API จำลอง ไม่เรียก Pushover จริง ไม่เผยแพร่ exe ชุดนี้เอง High/default config เก่ายังคง priority 1; เลือก Emergency ใน GUI อย่างชัดเจน ดู `README.md` และ `VERIFICATION.md`
+
+กติกา Emergency ที่ใช้: ack แล้วเงียบจนเหตุจบ, clear ยืนยันแล้วขอ cancel, expired/cancelled ไม่ใช่ ack และไม่เปิดรอบใหม่เองในเหตุเดิม หยุดโปรแกรมไม่ยกเลิก cloud โดยอัตโนมัติ สถานะส่งที่ไม่รู้ receipt ระงับส่งใหม่ทั้งสองโหมดและเก็บหลักฐานไว้ ไม่มีการเดา expiry จากนาฬิกาเครื่องและไม่มี silent fallback/ปุ่ม force-resolve รายละเอียด retry/expire และเพดาน 50 retries อยู่ด้านล่าง
 
 ## 1. จำนวนภาพต้องต่อเนื่องจริง
 
@@ -60,7 +62,7 @@
 - หากช่องว่างแล้ว ให้ยกเลิก retry ของ receipt ที่ยัง active และตรวจผล cancel; หาก API ยกเลิกไม่สำเร็จต้องแสดงสถานะ pending/error เพราะแจ้งเตือนฝั่ง cloud อาจยังดำเนินต่อ ไม่รับประกันหยุดทันที
 - หากเช็ก receipt ไม่ได้เพราะ network error ห้ามเปลี่ยนเป็น fallback แล้วส่งใหม่ทันทีขณะที่ Emergency เดิมอาจ retry อยู่ ต้องยืนยัน/ยกเลิก notification เดิมก่อนเปลี่ยนโหมด
 - API poll สำเร็จแต่ `acknowledged=0`, receipt หมดอายุ และ API poll ล้มเหลวเป็นคนละสถานะ ห้ามนับรวมเป็นผู้ใช้รับทราบ
-- คำถามที่ยังต้องตกลง: หลังผู้ใช้กดรับทราบแล้ว ถ้าแบงค์ยังอยู่ ต้องให้เงียบจนเอาออก หรือเริ่มรอบเตือนใหม่? ไม่ตั้งความหมายนี้เอง
+- ใช้พฤติกรรมที่เสนอและผู้ใช้ให้ทำโหมดนี้ต่อ: หลังรับทราบ ถ้าวัตถุยังอยู่ให้เงียบจนเหตุจบ ไม่เริ่มรอบใหม่เอง ส่วน expired/cancelled แสดงแยก ไม่ปลอมเป็นรับทราบ
 
 ## 5. การเก็บข้อมูล
 

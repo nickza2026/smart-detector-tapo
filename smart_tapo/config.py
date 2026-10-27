@@ -43,6 +43,10 @@ class Config:
     poll_interval_seconds: float = 0.25
     reminder_interval_seconds: float = 60.0
     notify_enabled: bool = False
+    notification_priority: int = 1
+    emergency_retry_seconds: int = 60
+    emergency_expire_seconds: int = 10800
+    emergency_poll_seconds: int = 10
     history_web_port: int = 8080
     difference_threshold: float = 15.0
     changed_pixel_ratio: float = 0.12
@@ -75,6 +79,13 @@ class Config:
     alignment_spatial_tolerance_pixels: int = 2
 
     def validate(self):
+        if type(self.notification_priority) is not int or self.notification_priority not in (1,2):
+            raise ValueError('Notification priority must be 1 or 2')
+        for name,minimum,maximum in (('emergency_retry_seconds',30,10800),
+                ('emergency_expire_seconds',1,10800),('emergency_poll_seconds',5,3600)):
+            value=getattr(self,name)
+            if type(value) is not int or not minimum<=value<=maximum:
+                raise ValueError(name+' is outside the supported integer range')
         if type(self.history_web_port) is not int or not 1 <= self.history_web_port <= 65535:
             raise ValueError('History web port must be an integer between 1 and 65535')
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", self.camera_id):

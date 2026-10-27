@@ -17,6 +17,19 @@ def _emit(messages, role, kind):
         pass
 
 
+_EMERGENCY_HINTS = {
+    'emergency_sending': 'กำลังส่งแจ้งเตือนฉุกเฉิน',
+    'emergency_active': 'ฉุกเฉินทำงานบนคลาวด์ อาจแจ้งต่อแม้หยุดแอป',
+    'emergency_acknowledged': 'ผู้รับกดยืนยันแล้ว ไม่ได้หมายความว่าธนบัตรถูกนำออก',
+    'emergency_expired': 'ฉุกเฉินหมดอายุ ไม่ใช่การกดยืนยัน',
+    'emergency_cancel_pending': 'กำลังขอยกเลิก คลาวด์อาจแจ้งต่อแม้หยุดแอป',
+    'emergency_cancelled': 'ยกเลิกฉุกเฉินแล้ว',
+    'emergency_ambiguous': 'ไม่ทราบใบรับจากคลาวด์ ระงับส่งซ้ำอัตโนมัติ คลาวด์อาจแจ้งต่อแม้หยุดแอป',
+    'emergency_failed': 'ส่งฉุกเฉินไม่สำเร็จ',
+    'emergency_shadow': 'จำลองฉุกเฉิน ไม่ส่งจริง',
+}
+
+
 class _SafeLog(logging.Handler):
     def __init__(self, messages, role):
         super().__init__(logging.INFO)
@@ -26,7 +39,14 @@ class _SafeLog(logging.Handler):
         # Translate known app templates to safe operator hints, never arbitrary
         # exception strings, camera UI XML, paths or credential-bearing args.
         template = str(record.msg)
-        if template.startswith('Alignment unavailable:'):
+        if template == 'Emergency state: %s':
+            if (not isinstance(record.args, tuple) or len(record.args) != 1 or
+                    type(record.args[0]) is not str):
+                return
+            kind = 'emergency_' + record.args[0]
+            if kind not in _EMERGENCY_HINTS:
+                return
+        elif template.startswith('Alignment unavailable:'):
             kind = 'alignment'
         elif template.startswith('Camera view changed:'):
             kind = 'view_changed'
@@ -157,6 +177,7 @@ class DesktopController:
                         'failed': 'เริ่มงานไม่สำเร็จ ตรวจการตั้งค่า ภาพช่องว่าง และโปรแกรมอื่นที่ใช้ข้อมูลชุดนี้',
                         'stopped': 'หยุดแล้ว',
                     }
+                    hints.update(_EMERGENCY_HINTS)
                     if sender != role or kind not in hints:
                         continue
                     if kind == 'ready' and record['state'] == 'starting':

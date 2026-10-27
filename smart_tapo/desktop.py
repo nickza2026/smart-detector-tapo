@@ -10,6 +10,7 @@ import re
 import subprocess
 import tempfile
 import threading
+import time
 import tkinter as tk
 from dataclasses import replace
 from pathlib import Path
@@ -18,6 +19,7 @@ from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageTk
 
 from .calibrate import save_calibration
+from .capture_diagnostics import describe_capture
 from .config import Rect
 from .desktop_calibration import is_ready, mark_ready
 from .desktop_controller import DesktopController
@@ -68,6 +70,9 @@ class DesktopApp:
         self._build_control()
         self.history_panel=HistoryPanel(self.notebook,lambda:self.config,self._remember_history_port)
         self.notebook.add(self.history_panel,text='ประวัติการหยอดแบงค์')
+        self.notifications=ttk.Frame(self.notebook,padding=14)
+        self.notebook.add(self.notifications,text='แจ้งเตือน Pushover')
+        self._build_notifications()
         self.status = tk.StringVar(value='พร้อมตั้งค่า — ยังไม่เปิดกล้องและไม่ส่งแจ้งเตือน')
         ttk.Label(outer, textvariable=self.status, wraplength=940).pack(anchor='w', pady=(10, 3))
         ttk.Label(outer, text='บันทึกการตั้งค่าที่: ' + str(store.config_path), wraplength=940).pack(anchor='w')
@@ -110,27 +115,63 @@ class DesktopApp:
                    ('adb_path','ไฟล์ adb.exe'), ('memu_executable','ไฟล์ MEmu.exe (ไม่จำเป็นถ้าเปิดอยู่แล้ว)'),
                    ('adb_serial','อุปกรณ์ MEmu / ADB Serial'),
                    ('stuck_consecutive_frames','จำนวนภาพต่อเนื่องก่อนเตือน'),
-                   ('deposit_history_hours','เก็บประวัติหยอดปกติ (ชั่วโมง)')]
+                   ('deposit_history_hours','เก็บประวัติหยอดปกติ (ชั่วโมง)'),
+                   ('capture_interval_seconds','ช่วงรับภาพเป้าหมาย (วินาที เช่น 1 หรือ 0.2)')]
         for row, (key, label) in enumerate(entries):
             self._entry(self.settings,row,key,label,getattr(self.config,key),
                         browse=key in ('adb_path','memu_executable'))
         ttk.Button(self.settings, text='ค้นหาอุปกรณ์', command=self.find_devices).grid(row=4,column=2)
-        ttk.Separator(self.settings).grid(row=7,column=0,columnspan=3,sticky='ew',pady=14)
-        ttk.Label(self.settings,text='Pushover',style='Subheading.TLabel').grid(row=8,column=0,sticky='w')
+        ttk.Label(self.settings,text='ช่วงรับภาพเป็นเป้าหมาย ไม่รับประกัน FPS จริงของ ADB; '
+                  'การรับภาพเร็วขึ้นทำให้ครบจำนวนภาพก่อนเตือนเร็วขึ้นด้วย เช่น 0.2 วินาที / 50 ภาพ ≈ 10 วินาที '
+                  'และภาพนาฬิกาไม่เปลี่ยนอาจยังไม่ผ่านการยืนยันภาพใหม่ ไม่ใช่การแก้ detector ด้วยการลดช่วงเวลาอย่างเดียว',
+                  wraplength=700).grid(row=8,column=0,columnspan=3,sticky='w',pady=8)
+        actions=ttk.Frame(self.settings)
+        actions.grid(row=9,column=0,columnspan=3,sticky='w',pady=10)
+        ttk.Button(actions,text='บันทึกการตั้งค่า',command=self.save_settings).pack(side='left',padx=(0,8))
+        ttk.Button(actions,text='เปิดโฟลเดอร์ข้อมูล',command=self.open_folder).pack(side='left')
+
+    def _build_notifications(self):
+        self.notification_actions=ttk.Frame(self.notifications)
+        self.notification_actions.pack(side='bottom',fill='x',pady=(8,0))
+        wrap=ttk.Frame(self.notifications)
+        wrap.pack(fill='both',expand=True)
+        canvas=tk.Canvas(wrap,highlightthickness=0)
+        canvas.pack(side='left',fill='both',expand=True)
+        scroll=ttk.Scrollbar(wrap,orient='vertical',command=canvas.yview)
+        scroll.pack(side='right',fill='y')
+        canvas.configure(yscrollcommand=scroll.set)
+        panel=ttk.Frame(canvas)
+        window=canvas.create_window(0,0,window=panel,anchor='nw')
+        panel.bind('<Configure>',lambda event:canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.bind('<Configure>',lambda event:canvas.itemconfigure(window,width=max(1,event.width)))
+        panel.columnconfigure(1,weight=1)
+        ttk.Label(panel,text='Pushover — High / Emergency',style='Subheading.TLabel').grid(row=0,column=0,columnspan=3,sticky='w')
         self.token, self.user = tk.StringVar(), tk.StringVar()
-        for row, label, var in ((9,'App Token',self.token),(10,'User / Group Key',self.user)):
-            ttk.Label(self.settings,text=label).grid(row=row,column=0,sticky='w',pady=4)
-            ttk.Entry(self.settings,textvariable=var,show='*').grid(row=row,column=1,sticky='ew',padx=8,pady=4)
+        for row,label,var in ((1,'App Token',self.token),(2,'User / Group Key',self.user)):
+            ttk.Label(panel,text=label).grid(row=row,column=0,sticky='w',pady=4)
+            ttk.Entry(panel,textvariable=var,show='*').grid(row=row,column=1,sticky='ew',padx=8,pady=4)
         self.notify = tk.BooleanVar(value=self.config.notify_enabled)
-        ttk.Checkbutton(self.settings,text='เปิดส่งแจ้งเตือนจริง (ปิด = เก็บผลทดสอบเท่านั้น)',
-                        variable=self.notify).grid(row=11,column=0,columnspan=3,sticky='w',pady=8)
-        ttk.Label(self.settings,text='คีย์บันทึกด้วย Windows DPAPI สำหรับบัญชีนี้ ไม่อยู่ใน config หรือ log',
-                  wraplength=800).grid(row=12,column=0,columnspan=3,sticky='w')
-        actions = ttk.Frame(self.settings)
-        actions.grid(row=13,column=0,columnspan=3,sticky='w',pady=14)
+        ttk.Checkbutton(panel,text='เปิดส่งแจ้งเตือนจริง (ปิด = ทดสอบ ไม่เรียก API)',variable=self.notify).grid(row=3,column=0,columnspan=3,sticky='w',pady=6)
+        ttk.Label(panel,text='โหมด').grid(row=4,column=0,sticky='w')
+        self.priority=tk.StringVar(value='2 — Emergency' if self.config.notification_priority==2 else '1 — High')
+        self.priority_widget=ttk.Combobox(panel,textvariable=self.priority,values=('1 — High','2 — Emergency'),state='readonly')
+        self.priority_widget.grid(row=4,column=1,sticky='ew',padx=8)
+        self.emergency_form={}
+        for row,key,label in ((5,'emergency_retry_seconds','เตือนซ้ำโดย Pushover (วินาที ≥ 30)'),
+                              (6,'emergency_expire_seconds','หมดอายุที่ขอ (วินาที ≤ 10800)'),
+                              (7,'emergency_poll_seconds','ตรวจรับทราบ (วินาที ≥ 5)')):
+            ttk.Label(panel,text=label).grid(row=row,column=0,sticky='w',pady=4)
+            var=tk.StringVar(value=str(getattr(self.config,key)))
+            self.emergency_form[key]=var
+            ttk.Entry(panel,textvariable=var).grid(row=row,column=1,sticky='ew',padx=8,pady=4)
+        ttk.Label(panel,text='Emergency: รับทราบแล้วเงียบจนเหตุการณ์จบ; ช่องว่างที่ยืนยันแล้วจะขอยกเลิกบน Pushover '
+                  'ไม่ส่ง High reminder ซ้อน ถ้าหมดอายุไม่ถือว่ารับทราบและไม่เปิดรอบใหม่เองในเหตุเดิม',wraplength=700).grid(row=8,column=0,columnspan=3,sticky='w',pady=6)
+        ttk.Label(panel,text='Pushover จำกัด 50 retries แม้ขอหมดอายุ 3 ชั่วโมง; ตั้ง retry 60 วินาทีจึงอาจหยุดราว 50 นาที '
+                  'หยุด Worker/ปิดโปรแกรมไม่หยุดการเตือนที่ cloud ส่งไปแล้ว ต้องรับทราบใน Pushover หรือรอหมดอายุ',wraplength=700).grid(row=9,column=0,columnspan=3,sticky='w',pady=6)
+        ttk.Label(panel,text='คีย์ใช้ Windows DPAPI ไม่ลง config/log; config เก่ายังเป็น High จนเลือก Emergency และบันทึก',wraplength=700).grid(row=10,column=0,columnspan=3,sticky='w')
+        actions=self.notification_actions
         ttk.Button(actions,text='บันทึกการตั้งค่า',command=self.save_settings).pack(side='left',padx=(0,8))
         ttk.Button(actions,text='ล้างคีย์ที่บันทึกไว้',command=self.clear_keys).pack(side='left',padx=(0,8))
-        ttk.Button(actions,text='เปิดโฟลเดอร์ข้อมูล',command=self.open_folder).pack(side='left')
 
     def _build_calibration(self):
         ttk.Label(self.calibration,text='ตั้งภาพอ้างอิงครั้งแรก — ไม่ต้องพิมพ์คำสั่งหรือหาไฟล์ empty เอง',
@@ -172,6 +213,9 @@ class DesktopApp:
             self.stop_buttons[role]=ttk.Button(frame,text='หยุด',command=lambda r=role:self.controller.stop(r))
             self.stop_buttons[role].pack(side='left')
         ttk.Button(self.control,text='หยุดทั้งหมด',command=self.controller.stop_all).pack(anchor='w',pady=10)
+        self.capture_metrics=tk.StringVar(value='ยังไม่มีข้อมูลจังหวะรับภาพ')
+        self.metrics_due=0
+        ttk.Label(self.control,textvariable=self.capture_metrics,wraplength=700).pack(anchor='w',pady=4)
         ttk.Label(self.control,text='สถานะ / ข้อผิดพลาด').pack(anchor='w')
         self.log=tk.Text(self.control,height=16,wrap='word',state='disabled',font=('Consolas',10))
         self.log.pack(fill='both',expand=True,pady=5)
@@ -193,6 +237,14 @@ class DesktopApp:
         except ValueError:raise ValueError('จำนวนภาพก่อนเตือนต้องเป็นจำนวนเต็มบวก') from None
         try:updates['deposit_history_hours']=float(updates['deposit_history_hours'])
         except ValueError:raise ValueError('ระยะเก็บประวัติต้องเป็นจำนวนชั่วโมงมากกว่า 0') from None
+        try:updates['capture_interval_seconds']=float(updates['capture_interval_seconds'])
+        except ValueError:raise ValueError('ช่วงรับภาพต้องเป็นจำนวนวินาทีมากกว่า 0') from None
+        priorities={'1 — High':1,'2 — Emergency':2}
+        if self.priority.get() not in priorities:raise ValueError('เลือกโหมด High หรือ Emergency')
+        updates['notification_priority']=priorities[self.priority.get()]
+        for key,var in self.emergency_form.items():
+            try:updates[key]=int(var.get().strip())
+            except ValueError:raise ValueError('เวลา Emergency ต้องเป็นจำนวนเต็มวินาทีตามขอบเขตที่แสดง') from None
         updates['notify_enabled']=self.notify.get()
         return replace(self.config,**updates).validate()
 
@@ -417,6 +469,10 @@ class DesktopApp:
                 else:done(value)
         except queue.Empty:pass
         states=self.controller.snapshot()
+        now=time.monotonic()
+        if now>=self.metrics_due:
+            self.capture_metrics.set(describe_capture(self.config))
+            self.metrics_due=now+1
         active=any(self.controller.is_running(role) for role in states)
         labels={'stopped':'หยุดอยู่','starting':'กำลังเริ่ม','running':'กำลังทำงาน','stopping':'กำลังหยุดอย่างปลอดภัย','failed':'หยุดเพราะข้อผิดพลาด — ดูข้อความด้านล่าง'}
         for role,value in states.items():
@@ -432,6 +488,8 @@ class DesktopApp:
                     widget.configure(state='disabled' if active or self.busy or self.closing else 'normal')
                 lock_settings(widget)
         lock_settings(self.settings)
+        lock_settings(self.notifications)
+        if not (active or self.busy or self.closing):self.priority_widget.configure(state='readonly')
         for widget in (self.capture_ref_button,self.load_ref_button,self.save_ref_button,self.confirm_box):
             widget.configure(state='disabled' if active or self.busy or self.closing else 'normal')
         if self.closing:
@@ -463,6 +521,7 @@ def _smoke_gui_flow(root, app):
     app.form['adb_path'].set(str(store.root/'nonexistent-smoke-adb.exe'))
     app.form['adb_serial'].set('synthetic-device')
     app.form['memu_executable'].set('')
+    app.priority.set('2 — Emergency')
     app.form['stuck_consecutive_frames'].set('1')
     app.config=replace(app.config,startup_timeout_seconds=.3,max_live_age_seconds=120)
     if not app.save_settings():raise RuntimeError('GUI settings did not save')
@@ -493,7 +552,7 @@ def _smoke_gui_flow(root, app):
         root.update()
         try:
             with closing(sqlite3.connect(app.config.data_dir/'worker.sqlite3')) as db:
-                found=db.execute("SELECT count(*) FROM notifications WHERE status='shadow'").fetchone()[0]==1
+                found=db.execute("SELECT count(*) FROM emergency_notifications WHERE state='shadow'").fetchone()[0]==1
         except sqlite3.Error:pass
         if found:break
         time.sleep(.05)
@@ -511,7 +570,7 @@ def _smoke_gui_flow(root, app):
     app.controller.stop_all()
     deadline=time.monotonic()+20
     while time.monotonic()<deadline and app._active():root.update();time.sleep(.05)
-    result.update(worker_stopped=not app._active(),shadow_notification=found,
+    result.update(worker_stopped=not app._active(),shadow_notification=found,emergency_shadow=found,
                   calibration_ready=is_ready(app.config,store.root),real_notifications=0)
     if not all(result[key] for key in ('worker_stopped','shadow_notification','calibration_ready')):
         raise RuntimeError('GUI worker flow did not complete safely')
@@ -538,9 +597,10 @@ def _smoke_gui_flow(root, app):
         with client.open(image_url,timeout=5) as response:
             image_bytes=response.read(16*1024*1024+1)
         result['history_web_served']='ประวัติการหยอดแบงค์' in body and image_bytes.startswith(b'\x89PNG\r\n\x1a\n')
+        result['thai_time']='+07:00' in body and 'UTC+7' in body
     finally:
         web.stop()
-    if not all(result[key] for key in ('history_menu_created','history_event_visible','history_full_image','history_web_served')):
+    if not all(result[key] for key in ('history_menu_created','history_event_visible','history_full_image','history_web_served','emergency_shadow','thai_time')):
         raise RuntimeError('GUI history/web smoke did not complete')
     if os.name=='nt':
         store.save_credentials('synthetic-smoke-token','synthetic-smoke-user')
