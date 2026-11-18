@@ -24,3 +24,15 @@ desktop.lock
 # Supplied real camera audio is private input, not publication/build material.
 /sound/
 /prepared-profile/
+# Local camera samples, analysis scratch, and per-machine agent setup.
+/empty.png
+*.mp4
+*.mkv
+*.avi
+.tmp_analysis/
+.cursor/
+# Tooling caches and logs.
+.pytest_cache/
+.coverage
+*.log
+Thumbs.db
