@@ -1,5 +1,7 @@
 """Synthetic-only storage relocation and RAM desktop regressions."""
+import ctypes
 from dataclasses import replace
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
@@ -9,6 +11,13 @@ from unittest.mock import Mock, patch
 from smart_tapo.config import Config
 from smart_tapo.startup import bind, validate_binding
 from tests import test_desktop_storage_budget as budget_tests
+
+
+def _short_path(path):
+    if os.name!='nt':return None
+    buffer=ctypes.create_unicode_buffer(32768)
+    if not ctypes.windll.kernel32.GetShortPathNameW(str(path),buffer,len(buffer)):return None
+    return Path(buffer.value)
 
 
 class StorageConsentTests(unittest.TestCase):
@@ -75,6 +84,19 @@ class LocationAdmissionTests(unittest.TestCase):
         with patch('smart_tapo.storage_location.secrets.token_hex',return_value='collision'),self.assertRaises(FileExistsError):
             self.admit(self.old)
         self.assertEqual(fixture.read_bytes(),b'not our probe')
+
+    def test_windows_short_name_alias_uses_same_overlap_rules(self):
+        from smart_tapo.storage_location import preflight_location
+        long_root=self.root/'LongConfigurationFolder';long_root.mkdir()
+        old=long_root/'data';old.mkdir()
+        short_root=_short_path(long_root)
+        if short_root is None or short_root==long_root:
+            self.skipTest('Volume has no 8.3 short names')
+        baseline=short_root/'calibration'/'empty.png'
+        self.assertEqual(preflight_location(short_root/'new',long_root,old,baseline),short_root/'new')
+        for value in (short_root/'data'/'nested',short_root):
+            with self.subTest(value=value),self.assertRaises(ValueError):
+                preflight_location(value,long_root,old,baseline)
 
     def test_permission_failure_and_owned_probe_cleanup(self):
         with patch('smart_tapo.storage_location.os.open',side_effect=PermissionError),self.assertRaises(PermissionError):
@@ -197,8 +219,8 @@ class RelocationLifecycleTests(unittest.TestCase):
             with patch('smart_tapo.desktop.messagebox.askyesno',return_value=True):
                 self.assertFalse(app.save_settings())  # requires a new process
             loaded=store.load_or_create()
-            self.assertEqual(loaded.data_dir,root/'new-data')
-            self.assertEqual(loaded.baseline_path,app.config.baseline_path)
+            self.assertEqual(loaded.data_dir,(root/'new-data').resolve())
+            self.assertEqual(loaded.baseline_path,app.config.baseline_path.resolve())
             self.assertEqual(private.read_bytes(),b'synthetic encrypted fixture')
             self.assertEqual(list((root/'new-data').iterdir()),[])
 

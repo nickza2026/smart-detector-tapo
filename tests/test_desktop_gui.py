@@ -411,7 +411,7 @@ class DesktopGuiTests(unittest.TestCase):
              patch('smart_tapo.desktop.messagebox.askyesno',return_value=True), \
              patch('smart_tapo.startup.manage_entry') as startup_entry:
             self.assertEqual(main(),0)
-        self.assertEqual(Path(json.loads(self.store.config_path.read_text(encoding='utf-8'))['data_dir']),target)
+        self.assertEqual(Path(json.loads(self.store.config_path.read_text(encoding='utf-8'))['data_dir']),target.resolve())
         self.assertEqual(self.app.config.data_dir,old)
         self.assertTrue(self.controller.closed)
         startup_entry.assert_not_called()

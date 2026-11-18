@@ -1121,6 +1121,12 @@ def smoke_gui(report_path,*,audio_cases=None):
         try:
             app=DesktopApp(root,DesktopStore(Path(directory)/'config.json'))
             result=_smoke_gui_flow(root,app)
+            if os.name=='nt':
+                url,camera=app.config.notify_api_url,app.config.camera_id
+                app.store.save_notify_key('synthetic-smoke-key',url,camera)
+                if app.store.load_notify_key(url,camera)!='synthetic-smoke-key':
+                    raise RuntimeError('Windows credential round trip failed')
+                result['windows_dpapi_roundtrip']=True
             from .storage_recovery_smoke import smoke_storage_recovery
             result.update(smoke_storage_recovery(root, Path(directory)/'storage-recovery'))
             result['offscreen_policy']=window_policy

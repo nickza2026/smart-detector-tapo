@@ -1,5 +1,6 @@
 """Reference compression must not understate actual capture PNG encoding."""
 from dataclasses import replace
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -37,6 +38,9 @@ class PngEncodingBudgetTests(unittest.TestCase):
             with patch('cv2.imencode',wraps=cv2.imencode) as encode:
                 estimate_storage(config);estimate_storage(config)
                 self.assertEqual(encode.call_count,1)
+                before=baseline.stat().st_mtime_ns
                 Image.new('RGB',(64,48),'white').save(baseline)
+                # Same-size rewrites can land in one Windows clock tick on slow runners.
+                os.utime(baseline,ns=(before+1_000_000_000,before+1_000_000_000))
                 estimate_storage(config)
                 self.assertEqual(encode.call_count,2)

@@ -20,7 +20,8 @@ def smoke_storage_restart():
     from . import desktop as ui
     real_app=ui.DesktopApp
     with tempfile.TemporaryDirectory(prefix='smart-tapo-storage-main-smoke-') as directory:
-        base=Path(directory);config_path=base/'config.json';target=base/'new-dataset'
+        # DesktopStore persists resolved paths; a short-name TEMP must compare equal.
+        base=Path(directory).resolve();config_path=base/'config.json';target=base/'new-dataset'
         apps=[];errors=[];sentinels=[];loaded=[]
         def construct(root,store):
             app=real_app(root,store);apps.append(app)

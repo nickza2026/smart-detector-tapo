@@ -23,6 +23,11 @@ def location_identity(value):
     return os.path.normcase(os.path.abspath(value))
 
 
+def _canonical(path):
+    # Windows 8.3 aliases (C:\Users\RUNNER~1) must not defeat overlap checks.
+    return Path(os.path.realpath(path))
+
+
 def _check_ancestry(path):
     # Do this BEFORE resolve/abspath: link/../destination must not hide a link.
     for part in reversed((path, *path.parents)):
@@ -48,16 +53,17 @@ def preflight_location(value, config_root, current, baseline_path=None):
     _check_ancestry(raw)
     if target == Path(target.anchor):
         raise ValueError('เลือกโฟลเดอร์เฉพาะ ไม่ใช้รากไดรฟ์')
-    root = normalize_location(config_root, config_root)
-    old = normalize_location(current, config_root)
-    changed = location_identity(target) != location_identity(old)
+    canonical = _canonical(target)
+    root = _canonical(normalize_location(config_root, config_root))
+    old = _canonical(normalize_location(current, config_root))
+    changed = location_identity(canonical) != location_identity(old)
     if changed:
-        if target == root or target in root.parents or old in target.parents or target in old.parents:
+        if canonical == root or canonical in root.parents or old in canonical.parents or canonical in old.parents:
             raise ValueError('ใช้โฟลเดอร์ข้อมูลแยกจากโฟลเดอร์เดิมและโฟลเดอร์ตั้งค่า')
         if baseline_path is not None:
-            calibration = normalize_location(baseline_path, config_root).parent
-            if (target == calibration or target in calibration.parents
-                    or (calibration != root and calibration in target.parents)):
+            calibration = _canonical(normalize_location(baseline_path, config_root).parent)
+            if (canonical == calibration or canonical in calibration.parents
+                    or (calibration != root and calibration in canonical.parents)):
                 raise ValueError('ไม่ใช้โฟลเดอร์ภาพอ้างอิงเป็นโฟลเดอร์ข้อมูล')
         if target.exists() and next(target.iterdir(), None) is not None:
             raise ValueError('โฟลเดอร์ใหม่ต้องว่าง ไม่รับฐานข้อมูลหรือประวัติเดิมโดยอัตโนมัติ')

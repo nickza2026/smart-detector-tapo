@@ -107,15 +107,17 @@ def main():
         data = json.loads(report.read_text(encoding='utf-8'))
         for key in ('gui_created', 'auto_config_created', 'worker_stopped',
                     'shadow_notification', 'calibration_ready', 'windows_dpapi_roundtrip',
-                    'capture_process_started','history_menu_created','history_event_visible',
+                    'rtsp_three_distinct_pids','history_menu_created','history_event_visible',
                     'history_full_image','history_web_served',
-                    'audio_tab_created','audio_binary_loaded','audio_spawned_pcm_wav'):
+                    'rtsp_audio_backend','rtsp_pcm_real_decoder','rtsp_audio_started_first',
+                    'rtsp_audio_stopped_reaped','notify_test_fake_only'):
             if data.get(key) is not True:
                 raise RuntimeError('Packaged GUI did not verify: ' + key)
         if data.get('real_notifications') != 0:
             raise RuntimeError('GUI smoke must not use live notifications')
-        if data.get('audio_real_capture') is not False or data.get('audio_real_device_enumeration') is not False:
-            raise RuntimeError('Audio smoke must not touch real endpoints')
+        for key in ('real_windows_audio', 'real_adb', 'real_user_stream', 'external_delivery', 'webhook_real_http'):
+            if data.get(key) is not False:
+                raise RuntimeError('GUI smoke must not touch real endpoints: ' + key)
         print(json.dumps(data, indent=2))
 
 
