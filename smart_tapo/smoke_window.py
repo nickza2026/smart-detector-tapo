@@ -1,4 +1,5 @@
 """Windows native GUI smoke policy. Installed ONLY by explicit smoke mode."""
+import atexit
 import ctypes
 from ctypes import wintypes
 import os
@@ -6,6 +7,54 @@ import re
 import tkinter as tk
 
 _policy=None
+_activation_guard=None
+
+
+class _NoActivateGuard:
+    """Veto activation on this smoke thread, including a newly-created wrapper.
+
+    WS_EX_NOACTIVATE belongs to an HWND, not a Tk object. Tk can replace that
+    HWND during mapping before the post-map style check gets a chance to run.
+    A thread-local CBT hook vetoes HCBT_ACTIVATE before Windows grants focus;
+    it neither changes the foreground window nor hooks another process/thread.
+    """
+    def __init__(self, api, kernel):
+        self.api=api
+        self.handle=None
+        self.blocked=0
+        callback_type=ctypes.WINFUNCTYPE(ctypes.c_ssize_t,ctypes.c_int,
+                                        wintypes.WPARAM,wintypes.LPARAM)
+        api.SetWindowsHookExW.argtypes=[ctypes.c_int,callback_type,wintypes.HINSTANCE,wintypes.DWORD]
+        api.SetWindowsHookExW.restype=wintypes.HANDLE
+        api.CallNextHookEx.argtypes=[wintypes.HANDLE,ctypes.c_int,wintypes.WPARAM,wintypes.LPARAM]
+        api.CallNextHookEx.restype=ctypes.c_ssize_t
+        api.UnhookWindowsHookEx.argtypes=[wintypes.HANDLE]
+        api.UnhookWindowsHookEx.restype=wintypes.BOOL
+        kernel.GetCurrentThreadId.argtypes=[]
+        kernel.GetCurrentThreadId.restype=wintypes.DWORD
+        def callback(code,handle,detail):
+            if code==5:  # HCBT_ACTIVATE; nonzero prevents activation.
+                self.blocked+=1
+                return 1
+            return api.CallNextHookEx(self.handle,code,handle,detail)
+        self.callback=callback_type(callback)  # Keep the native callback alive.
+        self.handle=api.SetWindowsHookExW(5,self.callback,None,kernel.GetCurrentThreadId())  # WH_CBT
+        if not self.handle:
+            raise RuntimeError('Cannot protect native smoke window activation')
+
+    def close(self):
+        if self.handle is not None:
+            if not self.api.UnhookWindowsHookEx(self.handle):
+                raise RuntimeError('Cannot release native smoke activation hook')
+            self.handle=None
+
+
+def _install_activation_guard(api):
+    global _activation_guard
+    if _activation_guard is None:
+        _activation_guard=_NoActivateGuard(api,ctypes.WinDLL('kernel32',use_last_error=True))
+        atexit.register(_activation_guard.close)
+    return _activation_guard
 
 
 def install():
@@ -13,6 +62,7 @@ def install():
     if _policy is not None:return _policy
     if os.name!='nt':raise RuntimeError('Native smoke requires the Windows offscreen policy')
     api=ctypes.WinDLL('user32',use_last_error=True)
+    _install_activation_guard(api)  # Before constructing/mapping any Tk window.
     api.GetAncestor.argtypes=[wintypes.HWND,wintypes.UINT];api.GetAncestor.restype=wintypes.HWND
     api.GetWindowLongPtrW.argtypes=[wintypes.HWND,ctypes.c_int];api.GetWindowLongPtrW.restype=ctypes.c_ssize_t
     api.SetWindowLongPtrW.argtypes=[wintypes.HWND,ctypes.c_int,ctypes.c_ssize_t];api.SetWindowLongPtrW.restype=ctypes.c_ssize_t
@@ -54,11 +104,13 @@ def install():
                     'virtual_bottom':bottom,'owned_foreground':foreground,
                     'wrapper_changed':previous!=handle}
             raise RuntimeError('Native smoke escaped offscreen/no-focus policy: '+str(detail))
-        seen.append({'left':rect.left,'top':rect.top,'mapped':bool(window.winfo_ismapped())})
+        seen.append({'left':rect.left,'top':rect.top,'mapped':bool(window.winfo_ismapped()),
+                     'owned_foreground':foreground})
         return result
     tk.Tk.__init__=lambda window,*a,**k:initialize(tk_init,window,*a,**k)
     tk.Toplevel.__init__=lambda window,*a,**k:initialize(top_init,window,*a,**k)
     tk.Wm.wm_geometry=tk.Wm.geometry=move
     tk.Wm.wm_deiconify=tk.Wm.deiconify=deiconify
-    _policy={'virtual_right':right,'virtual_bottom':bottom,'target':[x,y],'shown_windows':seen}
+    _policy={'virtual_right':right,'virtual_bottom':bottom,'target':[x,y],'shown_windows':seen,
+             'ci_focus_allowed':False}
     return _policy

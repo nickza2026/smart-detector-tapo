@@ -88,6 +88,31 @@ def smoke(capture_command, worker_command):
     return {'stuck_events': events, 'shadow_notifications': len(statuses), 'real_notifications': 0}
 
 
+def validate_smoke_report(data):
+    """Require explicit GUI evidence, including the production Notify DPAPI path.
+
+    The Windows GUI saves and reloads a synthetic Notify key in its temporary
+    DesktopStore before emitting windows_dpapi_roundtrip. Fake delivery or the
+    webhook's separate scoped credential check is not a substitute for it.
+    """
+    if not isinstance(data, dict):
+        raise RuntimeError('Packaged GUI smoke report must be an object')
+    for key in ('gui_created', 'auto_config_created', 'worker_stopped',
+                'shadow_notification', 'calibration_ready', 'windows_dpapi_roundtrip',
+                'rtsp_three_distinct_pids', 'history_menu_created', 'history_event_visible',
+                'history_full_image', 'history_web_served',
+                'rtsp_audio_backend', 'rtsp_pcm_real_decoder', 'rtsp_audio_started_first',
+                'rtsp_audio_stopped_reaped', 'notify_test_fake_only'):
+        if data.get(key) is not True:
+            raise RuntimeError('Packaged GUI did not verify: ' + key)
+    if type(data.get('real_notifications')) is not int or data['real_notifications'] != 0:
+        raise RuntimeError('GUI smoke must not use live notifications')
+    for key in ('real_windows_audio', 'real_adb', 'real_user_stream',
+                'external_delivery', 'webhook_real_http'):
+        if data.get(key) is not False:
+            raise RuntimeError('GUI smoke must not touch real endpoints: ' + key)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dist', type=Path, required=True)
@@ -108,19 +133,7 @@ def main():
             raise RuntimeError('Packaged GUI failed or did not produce its smoke report: exit '
                                + str(result.returncode) + '; ' + detail)
         data = json.loads(report.read_text(encoding='utf-8'))
-        for key in ('gui_created', 'auto_config_created', 'worker_stopped',
-                    'shadow_notification', 'calibration_ready', 'windows_dpapi_roundtrip',
-                    'rtsp_three_distinct_pids','history_menu_created','history_event_visible',
-                    'history_full_image','history_web_served',
-                    'rtsp_audio_backend','rtsp_pcm_real_decoder','rtsp_audio_started_first',
-                    'rtsp_audio_stopped_reaped','notify_test_fake_only'):
-            if data.get(key) is not True:
-                raise RuntimeError('Packaged GUI did not verify: ' + key)
-        if data.get('real_notifications') != 0:
-            raise RuntimeError('GUI smoke must not use live notifications')
-        for key in ('real_windows_audio', 'real_adb', 'real_user_stream', 'external_delivery', 'webhook_real_http'):
-            if data.get(key) is not False:
-                raise RuntimeError('GUI smoke must not touch real endpoints: ' + key)
+        validate_smoke_report(data)
         print(json.dumps(data, indent=2))
 
 
