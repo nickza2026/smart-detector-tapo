@@ -10,13 +10,21 @@ from .frames import atomic_bytes
 
 
 def signature(config):
-    return {
-        'camera_id': config.camera_id, 'camera_name': config.camera_name,
-        'adb_serial': config.adb_serial, 'tapo_package': config.tapo_package,
+    result={
+        'camera_id': config.camera_id,
         'expected_size': list(config.expected_size), 'video': asdict(config.video),
         'roi': asdict(config.roi), 'baseline_path': str(config.baseline_path.resolve()),
         'sha256': hashlib.sha256(config.baseline_path.read_bytes()).hexdigest(),
     }
+    if getattr(config,'capture_backend','adb')=='rtsp':
+        from .capture.rtsp import rtsp_source_fingerprint
+        fingerprint=rtsp_source_fingerprint(config)
+        if config.rtsp_source_binding!=fingerprint:raise ValueError('RTSP calibration source not bound')
+        result.update(capture_backend='rtsp',source_fingerprint=fingerprint)
+    else:
+        result.update(camera_name=config.camera_name,adb_serial=config.adb_serial,
+                      tapo_package=config.tapo_package)
+    return result
 
 
 def mark_ready(config, root):

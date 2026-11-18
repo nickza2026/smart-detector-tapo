@@ -6,7 +6,13 @@ import sqlite3
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import timedelta, timezone
 from pathlib import Path
+
+
+# Rendering policy only: database epochs, ordering and retention remain UTC.
+# A fixed Thai offset avoids dependence on host settings or bundled tzdata.
+HISTORY_TIMEZONE = timezone(timedelta(hours=7), name='Asia/Bangkok')
 
 
 class HistoryUnavailable(RuntimeError):
@@ -39,6 +45,8 @@ class HistoryImage:
 IMAGE_ROLES = ('first_full', 'first', 'threshold', 'clear')
 KIND_LABELS = {'candidate': 'กำลังพบวัตถุ', 'normal_visual': 'ปกติ — วัตถุผ่านแล้ว',
                'stuck': 'ค้าง — ถึงเกณฑ์', 'incomplete': 'ข้อมูลไม่ครบ / ยืนยันไม่ได้'}
+# A note pulled back by the acceptor is not a deposit and is never listed.
+HIDDEN_FILTER = "e.kind != 'retracted' AND (e.kind != 'normal_visual' OR e.closed >= ?)"
 IMAGE_LABELS = {'first_full': 'ภาพเต็มเมื่อเริ่มพบ', 'first': 'กรอบตรวจแรก (จัดแนวแล้ว)',
                 'threshold': 'กรอบเมื่อถึงเกณฑ์ค้าง', 'clear': 'กรอบว่างเมื่อจบเหตุการณ์'}
 
@@ -87,7 +95,7 @@ def list_events(config, before=None, limit=100, now=None):
     with _database(config) as db:
         if db is None:
             return HistoryPage(())
-        where = "(e.kind != 'normal_visual' OR e.closed >= ?)"
+        where = HIDDEN_FILTER
         values = [_eligible(config, now)]
         if before is not None:
             where += ' AND (e.started < ? OR (e.started = ? AND e.id < ?))'
@@ -110,7 +118,7 @@ def get_event(config, event_id, now=None):
             return None
         row = db.execute('SELECT e.id,e.kind,e.started,e.last_present,e.first_clear,e.closed,'
                          '(SELECT count(*) FROM evidence v WHERE v.event=e.id) AS image_count '
-                         "FROM events e WHERE e.id=? AND (e.kind!='normal_visual' OR e.closed>=?)",
+                         'FROM events e WHERE e.id=? AND ' + HIDDEN_FILTER,
                          (event_id, _eligible(config, now))).fetchone()
         return HistoryEvent(**dict(row)) if row else None
 

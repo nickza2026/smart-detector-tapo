@@ -10,14 +10,14 @@ from tkinter import Toplevel, ttk, StringVar, messagebox
 
 from PIL import Image, ImageTk
 
-from .history import IMAGE_LABELS, KIND_LABELS, get_images, list_events
+from .history import HISTORY_TIMEZONE, IMAGE_LABELS, KIND_LABELS, get_images, list_events
 
 
 def local_time(value):
     if value is None:
         return '—'
     try:
-        return datetime.fromtimestamp(value).astimezone().strftime('%d/%m/%Y %H:%M:%S')
+        return datetime.fromtimestamp(value, tz=HISTORY_TIMEZONE).strftime('%d/%m/%Y %H:%M:%S')
     except (ValueError, TypeError, OverflowError, OSError):
         return '—'
 
@@ -26,6 +26,9 @@ class HistoryPanel(ttk.Frame):
     def __init__(self, parent, config_provider, save_port):
         super().__init__(parent, padding=14)
         self.config_provider, self.save_port = config_provider, save_port
+        # Only the GUI thread calls config_provider. HTTP threads read this
+        # config-only cell, never a bound GUI method or its Tk interpreter.
+        self._web_config = [config_provider()]
         self.server = None
         self.closed = False
         self.pending = False
@@ -104,21 +107,25 @@ class HistoryPanel(ttk.Frame):
     def _job(self, kind, work):
         self.pending = True
         generation = self.generation
+        results = self.results
         def target():
             try:
                 result = work()
                 error = False
             except Exception:
                 result, error = None, True
-            self.results.put_nowait((kind,generation,result,error))
+            # Do not capture self: the job may finish after the panel closes,
+            # and Tk objects must never be finalized by this background thread.
+            results.put_nowait((kind,generation,result,error))
         threading.Thread(target=target, daemon=True, name='SmartTapo-HistoryRead').start()
 
     def poll(self, visible=False):
         if self.closed:
             return
         config = self.config_provider()
+        self._web_config[0] = config
         scope = (config.data_dir, config.camera_id, config.deposit_history_hours)
-        self.retention.set('เวลาตามเครื่อง • รายการและภาพเหตุการณ์ปกติเก็บ '
+        self.retention.set('เวลาไทย (UTC+7) • รายการและภาพเหตุการณ์ปกติเก็บ '
                            + str(config.deposit_history_hours) + ' ชั่วโมงหลังจบ; ภาพทั่วไปวนลบ '
                            + str(config.rolling_frames_minutes) + ' นาที')
         if scope != self.scope:
@@ -202,9 +209,8 @@ class HistoryPanel(ttk.Frame):
                 if image.role not in safe:
                     raise ValueError()
                 with Image.open(safe[image.role].path) as source:
-                    width,height = self.config_provider().expected_size
-                    if source.format!='PNG' or source.width>width or source.height>height:
-                        raise ValueError()
+                    from .history_image import validate_history_png
+                    validate_history_png(source)
                     frame=source.convert('RGB')
                 frame.thumbnail((760,530),Image.Resampling.LANCZOS)
                 self.photo=ImageTk.PhotoImage(frame,master=self.viewer)
@@ -229,7 +235,9 @@ class HistoryPanel(ttk.Frame):
         try:
             self.save_port(port)
             from .history_web import HistoryWebServer
-            self.server=HistoryWebServer(self.config_provider)
+            self._web_config[0] = self.config_provider()
+            config_state = self._web_config
+            self.server=HistoryWebServer(lambda: config_state[0])
             self.server.start(port)
         except Exception:
             self.web_status.set('เปิดเว็บไม่ได้ พอร์ตอาจถูกใช้งานหรือบันทึกการตั้งค่าไม่ได้ ลองเลือก Port อื่น')

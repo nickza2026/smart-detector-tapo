@@ -1,0 +1,85 @@
+// HISTORICAL PRE-IMPLEMENTATION DRAFT, not the current physical schema.
+// Current implementation: refueling-local-storage.dbml. Source Live provenance
+// fields here remain design targets, NOT implemented/verified runtime behavior.
+// Proposed local storage extends existing SQLite desktop data. The remote
+// dashboard owns its own database and receives an API/webhook projection.
+// Time columns are UTC epoch seconds locally; UI renders Asia/Bangkok.
+
+Table refueling_sessions {
+  id text [pk]
+  camera_id text [not null]
+  started_at real [not null, note: 'Observed first paid-ready announcement, not first coin or pump flow']
+  last_ready_at real [not null]
+  ended_at real [note: 'NULL until a confirmed thank-you; never set by timeout']
+  ready_count integer [not null, note: 'Projection of distinct confirmed utterances, >=1']
+  revision integer [not null, note: 'Monotonic per-session snapshot version']
+  indexes {
+    (camera_id, started_at, id)
+  }
+  Note: 'One open session per camera, enforced by a partial unique index WHERE ended_at IS NULL in the implementation. Ready count/latest time are projections updated transactionally from canonical announcements.'
+}
+
+Table refueling_announcements {
+  id text [pk]
+  source_key text [not null, unique, note: 'Stable observation identity after overlapping-window deduplication']
+  camera_id text [not null]
+  session_id text [ref: > refueling_sessions.id, note: 'Nullable for a completion heard without a known start']
+  kind text [not null, note: 'paid_ready or end']
+  started_at real [not null]
+  ended_at real [not null]
+  confirmed_at real [not null]
+  capture_generation text [not null]
+  profile_id text [not null]
+  match_score real [not null, note: 'Correlation, NOT probability']
+  indexes {
+    (session_id, started_at, id)
+  }
+  Note: 'Canonical accepted Live observations only. Source spans must be continuous and ordered; camera must match session owner. Playback/analysis inputs never create these rows.'
+}
+
+Table refueling_issues {
+  session_id text [not null, ref: > refueling_sessions.id]
+  code text [not null, note: 'ready_prompt_repeated or completion_not_detected']
+  first_detected_at real [not null]
+  original_deadline_at real [note: 'Optional historical deadline snapshot; later ready prompts can change the current deadline']
+  indexes {
+    (session_id, code) [pk]
+  }
+  Note: 'Historical issues remain after completion. Has-issue is derived from these rows. No repeated timeout event on every poll.'
+}
+
+Table refueling_evidence {
+  id text [pk]
+  session_id text [not null, ref: > refueling_sessions.id]
+  source_visual_event_id text [note: 'Reference identifier to existing visual history; source may later expire']
+  source_evidence_key text [not null]
+  role text [not null]
+  captured_at real [not null]
+  managed_path text [not null, note: 'Local managed immutable evidence snapshot; NEVER a webhook URL']
+  sha256 text [not null]
+  retained_until real [note: 'User confirmed local72h; current physical schema derives this from first session creation']
+  indexes {
+    (session_id, source_evidence_key, role) [unique]
+  }
+  Note: 'Multiple photos per round. Include payment evidence before ready announcement under an association rule still to be confirmed. Preserve an owned snapshot/pin before old visual cleanup; do not blindly cascade deletion from original visual history.'
+}
+
+Table refueling_webhook_outbox {
+  event_id text [pk, note: 'Stable session-id plus revision; reused on every retry']
+  session_id text [not null, ref: > refueling_sessions.id]
+  revision integer [not null]
+  event_type text [not null]
+  destination_key text [not null, note: 'Pinned destination configuration identity, no plaintext token']
+  payload_json text [not null, note: 'Immutable proposed integration snapshot, not another authoritative session']
+  created_at real [not null]
+  status text [not null]
+  attempts integer [not null]
+  next_attempt_at real
+  delivered_at real
+  last_error_code text [note: 'Sanitized code, no response body/credentials']
+  indexes {
+    (session_id, revision) [unique]
+    (status, next_attempt_at, event_id)
+  }
+  Note: 'Commit new observation, aggregate, issue and outbox together before transport. Delivery is at-least-once; receiver deduplicates event_id and ignores older revisions. Image transport/auth and retry policy must match receiver API before implementation.'
+}

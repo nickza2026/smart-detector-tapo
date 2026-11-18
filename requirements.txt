@@ -2,3 +2,6 @@
 Pillow==13.0.0
 numpy==2.5.4
 opencv-python-headless==5.0.0.93
+av==19.0.2
+cryptography==50.0.2
+# Legacy Windows-loopback compatibility tests use the optional extra in pyproject.

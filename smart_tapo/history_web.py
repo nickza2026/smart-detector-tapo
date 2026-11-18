@@ -22,7 +22,7 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-from .history import (HistoryUnavailable, IMAGE_LABELS, KIND_LABELS,
+from .history import (HistoryUnavailable, HISTORY_TIMEZONE, IMAGE_LABELS, KIND_LABELS,
                       get_event, get_images, list_events)
 
 _TITLE = 'ประวัติการหยอดแบงค์'
@@ -43,7 +43,7 @@ def _stamp(value):
     if value is None:
         return '—'
     try:
-        return escape(datetime.fromtimestamp(value).astimezone().isoformat(timespec='seconds'))
+        return escape(datetime.fromtimestamp(value, tz=HISTORY_TIMEZONE).isoformat(timespec='seconds'))
     except (ValueError, OverflowError, OSError, TypeError):
         return '—'
 
@@ -54,6 +54,7 @@ def _document(body, hours):
             f'<title>{_TITLE}</title><style>{_STYLE}</style><body><h1>{_TITLE}</h1>'
             '<p class="notice">แสดงการพบวัตถุในช่องรับธนบัตรเท่านั้น '
             'ไม่ใช่การยืนยันการชำระเงินหรือยอดเงิน (occupancy, not payment confirmation)</p>'
+            '<p>เวลาทั้งหมดเป็นเวลาไทย (UTC+7)</p>'
             f'<p>เก็บเหตุการณ์ปกติหลังจบ {escape(str(hours))} ชั่วโมง</p>{body}</body></html>').encode('utf-8')
 
 
@@ -325,9 +326,8 @@ class _Handler(BaseHTTPRequestHandler):
             if len(data) > _MAX_IMAGE:
                 raise ValueError()
             with Image.open(io.BytesIO(data)) as png:
-                if (png.format != 'PNG' or png.width > config.expected_size[0]
-                        or png.height > config.expected_size[1]):
-                    raise ValueError()
+                from .history_image import validate_history_png
+                validate_history_png(png)
                 png.verify()
             with Image.open(io.BytesIO(data)) as png:
                 png.load()

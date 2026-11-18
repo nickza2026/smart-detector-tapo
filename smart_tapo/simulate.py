@@ -1,15 +1,16 @@
-"""Exercise image -> file spool -> SQLite without ADB, a live camera or Pushover."""
+"""Exercise image -> file spool -> SQLite without ADB, a live camera or Notify API."""
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import random
 import tempfile
 from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 
-from PIL import ImageDraw
+from PIL import Image,ImageDraw
 
 from .config import load_config
 from .frames import publish_frame
@@ -59,12 +60,32 @@ def simulate(config, image_path):
             worker.close()
 
 
+def simulate_synthetic(config):
+    """Self-contained example; never uses an operator's private empty image."""
+    image=Image.new('RGB',config.expected_size,'gray');draw=ImageDraw.Draw(image)
+    generator=random.Random(45156)
+    for _ in range(900):
+        x=generator.randrange(15,config.expected_size[0]-15)
+        y=generator.randrange(config.video.y+30,config.video.y+config.video.height-45)
+        shade=generator.choice([10,40,190,240])
+        draw.rectangle((x,y,x+8,y+8),fill=(shade,shade,shade))
+    draw.rectangle(config.roi.box(),fill=(70,70,70))
+    with tempfile.TemporaryDirectory(prefix='smart-tapo-synthetic-source-') as directory:
+        source=Path(directory)/'synthetic.png';image.save(source)
+        result=simulate(config,source);result['synthetic_source']=True
+        return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', required=True)
-    parser.add_argument('--image', required=True)
+    source=parser.add_mutually_exclusive_group(required=True)
+    source.add_argument('--image')
+    source.add_argument('--synthetic',action='store_true',help='Generate an owned synthetic image; no private PNG required')
     args = parser.parse_args()
-    print(json.dumps(simulate(load_config(args.config), args.image), ensure_ascii=False, indent=2))
+    config=load_config(args.config)
+    result=simulate_synthetic(config) if args.synthetic else simulate(config,args.image)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == '__main__':
