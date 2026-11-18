@@ -103,7 +103,10 @@ def main():
         result = subprocess.run([str(executable), '--smoke-report', str(report)],
                                 capture_output=True, text=True, timeout=150, check=False)
         if result.returncode or not report.is_file():
-            raise RuntimeError('Packaged GUI failed or did not produce its smoke report')
+            # The frozen app writes only a redacted error type/location on failure.
+            detail = report.read_text(encoding='utf-8')[:2000] if report.is_file() else 'no report'
+            raise RuntimeError('Packaged GUI failed or did not produce its smoke report: exit '
+                               + str(result.returncode) + '; ' + detail)
         data = json.loads(report.read_text(encoding='utf-8'))
         for key in ('gui_created', 'auto_config_created', 'worker_stopped',
                     'shadow_notification', 'calibration_ready', 'windows_dpapi_roundtrip',
