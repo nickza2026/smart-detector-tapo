@@ -187,7 +187,8 @@ class PlaybackTest:
             try:
                 if self.recv.poll(): events.append(self.recv.recv())
                 else: events.append(dict(kind='stopped', incomplete=True))
-            except EOFError: events.append(dict(kind='error', code='capture_worker_exit', incomplete=True))
+            # Windows raises BrokenPipeError, not EOFError, once a killed child's write end is gone.
+            except (EOFError, BrokenPipeError): events.append(dict(kind='error', code='capture_worker_exit', incomplete=True))
             self.recv.close(); self.updates.close(); self.updates.cancel_join_thread()
             self.process.close(); self.process = None
         return events

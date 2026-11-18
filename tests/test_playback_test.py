@@ -79,6 +79,50 @@ class PlaybackTests(unittest.TestCase):
         self.assertFalse(controller.is_running)
         with self.assertRaises(ValueError): controller.start(None,device(),consent=True)
 
+    def test_killed_child_with_broken_result_pipe_reports_exit(self):
+        import multiprocessing
+        from unittest.mock import Mock
+        class Dead:
+            def is_alive(self): return False
+            def join(self,timeout=None): pass
+            def close(self): pass
+        # Exercise both Windows failure sites deterministically, independent of
+        # whether this machine reports a closed native pipe as EOF or WinError109.
+        for failed_method in ('poll','recv'):
+            with self.subTest(failed_method=failed_method):
+                ctx=multiprocessing.get_context('spawn')
+                controller=PlaybackTest(target=stuck_child)
+                receiver=Mock()
+                receiver.poll.return_value=True
+                getattr(receiver,failed_method).side_effect=BrokenPipeError(109,'synthetic closed pipe')
+                controller.recv=receiver
+                controller.updates=ctx.Queue();controller.process=Dead()
+                updates=controller.updates
+                controller.stop_at=None;controller.last_update=controller.clock()
+                try:
+                    self.assertEqual(controller.poll(),[dict(kind='error',code='capture_worker_exit',incomplete=True)])
+                    self.assertFalse(controller.is_running)
+                    self.assertEqual(controller.poll(),[])
+                    receiver.close.assert_called_once()
+                    self.assertTrue(updates._closed)
+                finally:
+                    updates.close();updates.cancel_join_thread()
+
+    def test_native_closed_result_pipe_reports_exit_and_reaps(self):
+        import multiprocessing
+        from unittest.mock import Mock
+        ctx=multiprocessing.get_context('spawn')
+        controller=PlaybackTest(target=stuck_child)
+        controller.recv,send=ctx.Pipe(duplex=False);send.close()
+        controller.updates=ctx.Queue();controller.process=Mock()
+        controller.process.is_alive.return_value=False
+        controller.stop_at=None;controller.last_update=controller.clock()
+        try:
+            self.assertEqual(controller.poll(),[dict(kind='error',code='capture_worker_exit',incomplete=True)])
+            self.assertFalse(controller.is_running)
+        finally:
+            controller.recv.close();controller.updates.close();controller.updates.cancel_join_thread()
+
     def test_native_job_identity_mismatch_never_opens_output(self):
         from types import SimpleNamespace
         from smart_tapo.playback_test import playback_job
