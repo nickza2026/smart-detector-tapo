@@ -50,7 +50,7 @@ attempts รับ integer 1–3 และ max_elapsed รับเลข finite
 
 เก็บใน `notify-history.sqlite3` ภายใต้ `data_dir` ที่ยืนยันไว้ ไม่ใช่โฟลเดอร์ทำงานหรือที่เก็บคีย์ ประวัติแต่ละ data directory แยกกันและไม่ย้าย/รวมอัตโนมัติ เก็บย้อนหลัง 30 × 24 ชั่วโมงตามเวลาที่บันทึก รายการหมดอายุไม่ถูกแสดงและถูกทยอยลบครั้งละไม่เกิน 256 ระหว่างเปิดแอป/Worker ทำ cleanup; ขณะปิดโปรแกรมไม่มีงานลบเบื้องหลังของระบบปฏิบัติการ
 
-อ่านครั้งละไม่เกิน 100 รายการ เรียงล่าสุดก่อน รายละเอียด body โหลดเฉพาะรายการที่เลือก ไม่มีการอ่าน body ทั้งเดือนเข้าหน่วยความจำ ไฟล์ฐานข้อมูลใช้ connection แยกแต่ละ operation เพื่อรองรับ thread/process ของ Worker และแอป
+อ่านครั้งละไม่เกิน 100 รายการ เรียงล่าสุดก่อน รายละเอียด body โหลดเฉพาะรายการที่เลือก ไม่มีการอ่าน body ทั้งเดือนเข้าหน่วยความจำ ไฟล์ฐานข้อมูลใช้ connection แยกแต่ละ operation เพื่อรองรับ thread/process ของ Worker และแอป Writer รอ SQLite lock ได้สูงสุด 1 วินาที ส่วน reader ใช้ 100 ms; การบันทึกไม่สร้าง HTTP retry เพิ่ม
 
 ไม่บันทึก Authorization/API key จริงในฐานข้อมูลหรือ WAL; ช่อง Authorization แสดง `[REDACTED]` ปิดบังคีย์ที่ถูก echo กลับและ JSON fields ที่ระบุ token/password/secret/credential/capability/ack URL ไม่เก็บ Set-Cookie หรือ Location จาก response ส่วน headers ที่เก็บคือ Content-Type และ Retry-After การปิดบังไม่ใช่การส่งประวัติไปเซิร์ฟเวอร์ ประวัติอยู่ในเครื่องเท่านั้น
 

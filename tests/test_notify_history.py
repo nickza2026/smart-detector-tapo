@@ -134,6 +134,45 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(len(set(ids)),12)
         self.assertEqual(len(self.history.list_page()),13)
 
+    def test_writer_waits_for_short_real_sqlite_contention_without_dropping_attempt(self):
+        self.history.begin(self.target,self.alert,'manual_test')
+        blocker=sqlite3.connect(self.history.path)
+        blocker.execute('BEGIN IMMEDIATE')
+        entered,finished=threading.Event(),threading.Event()
+        original_connect=sqlite3.connect
+        class ObservedConnection(sqlite3.Connection):
+            def execute(inner,sql,*args,**kwargs):
+                entered.set()
+                return super().execute(sql,*args,**kwargs)
+        def connect(*args,**kwargs):
+            return original_connect(*args,**kwargs,factory=ObservedConnection)
+        def write():
+            try:return self.history.begin(self.target,self.alert,'health')
+            finally:finished.set()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            try:
+                with patch('smart_tapo.notify_history.sqlite3.connect',side_effect=connect):
+                    future=executor.submit(write)
+                    self.assertTrue(entered.wait(2))
+                    prematurely_finished=finished.wait(.3)
+            finally:
+                blocker.rollback();blocker.close()
+            self.assertFalse(prematurely_finished,'An ordinary short writer lock must not lose this attempt')
+            self.assertIsInstance(future.result(timeout=3),int)
+        self.assertEqual(len(self.history.list_page()),2)
+
+    def test_persistently_locked_writer_still_fails_within_bounded_wait(self):
+        self.history.begin(self.target,self.alert,'manual_test')
+        blocker=sqlite3.connect(self.history.path)
+        blocker.execute('BEGIN IMMEDIATE')
+        try:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future=executor.submit(self.history.begin,self.target,self.alert,'health')
+                with self.assertRaises(NotifyHistoryError):future.result(timeout=3)
+        finally:
+            blocker.rollback();blocker.close()
+        self.assertEqual(len(self.history.list_page()),1)
+
     def test_storage_failure_does_not_mask_acceptance_or_create_extra_send(self):
         accepted=json.dumps(dict(alert_id='alert_1',status='provider_accepted',importance='critical',
             acknowledged=False,delivery_verified=False,expires_at='2099-01-01T00:00:00Z')).encode()

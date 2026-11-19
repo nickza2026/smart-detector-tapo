@@ -96,13 +96,15 @@ class NotifyHistory:
                 raise NotifyHistoryError('ไฟล์ประวัติ Notify ไม่ปลอดภัย')
 
     @contextmanager
-    def _connection(self):
+    def _connection(self, *, write=False):
         db = None
         try:
             self._validate()
             self.root.mkdir(parents=True, exist_ok=True)
             self._validate()
-            db = sqlite3.connect(str(self.path), timeout=.1)
+            # Independent health/manual/Worker writers can overlap. Allow a
+            # bounded normal transaction to finish; keep UI readers short.
+            db = sqlite3.connect(str(self.path), timeout=1.0 if write else .1)
             db.row_factory = sqlite3.Row
             application_id = db.execute('PRAGMA application_id').fetchone()[0]
             tables = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1").fetchone()
@@ -141,7 +143,7 @@ class NotifyHistory:
         headers = {'Content-Type': 'application/json; charset=utf-8',
                    'Idempotency-Key': redact(alert.idempotency_key, target.key),
                    'Authorization': '[REDACTED]'}
-        with self._connection() as db:
+        with self._connection(write=True) as db:
             cursor = db.execute('''INSERT INTO notify_attempts
                 (created,channel,alert_id,importance,url,request_headers,request_body)
                 VALUES(?,?,?,?,?,?,?)''', (self.clock(), channel, redact(alert.alert_id, target.key),
@@ -153,7 +155,7 @@ class NotifyHistory:
         # Explicit safe response-header subset; no cookies, capabilities or Location.
         safe_headers = {name: redact(str(headers.get(name, ''))[:512], key)
                         for name in ('Content-Type', 'Retry-After') if headers and headers.get(name)}
-        with self._connection() as db:
+        with self._connection(write=True) as db:
             db.execute('''UPDATE notify_attempts SET state=?,code=?,http_status=?,
                 response_headers=?,response_body=?,response_truncated=?,elapsed_ms=? WHERE id=?''',
                 (result.state, result.code, status, json.dumps(safe_headers), body_text(raw,key),
@@ -189,7 +191,7 @@ class NotifyHistory:
         if not self.path.exists():
             return False
         cutoff = self.clock()-RETENTION_SECONDS
-        with self._connection() as db:
+        with self._connection(write=True) as db:
             db.execute('''DELETE FROM notify_attempts WHERE id IN
                 (SELECT id FROM notify_attempts WHERE created<? ORDER BY created,id LIMIT 256)''', (cutoff,))
             more = db.execute('SELECT 1 FROM notify_attempts WHERE created<? LIMIT 1',(cutoff,)).fetchone()
