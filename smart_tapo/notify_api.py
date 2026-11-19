@@ -6,9 +6,18 @@ import math
 import re
 import time
 from urllib import error, parse, request
+from .diagnostics import APP_VERSION
 
 DEFAULT_BASE_URL = "https://notify-alarm-api-7496986423345747739.olufy-0.nortezh.com"
 MAX_RESPONSE_BYTES = 65536
+
+
+def client_headers():
+    """Identify the application honestly, rather than the urllib default."""
+    return {"User-Agent": "SmartTapo/" + APP_VERSION.removeprefix('v'),
+            "Accept": "application/json"}
+
+
 _CODES = frozenset("provider_accepted provider_rejected provider_unregistered provider_authentication_failed expired_before_send provider_delivery_unknown partial_provider_outcome idempotency_key_required invalid_schema request_interrupted unauthorized not_found idempotency_conflict alert_id_conflict delivery_unknown_or_in_progress device_limit_reached body_too_large json_required invalid_message invalid_alert_id invalid_ttl invalid_importance payload_too_large rate_limited database_unavailable temporarily_unavailable fcm_not_configured ack_not_configured targeted_sender_not_configured device_registration_not_configured no_devices_registered delivery_state_unavailable network_unknown invalid_response cancelled retry_budget_exhausted".split())
 
 
@@ -159,7 +168,7 @@ def send_alert(target, alert, cancel, *, opener=None):
     if cancel.is_set():
         return NotifyResult("failed", "cancelled")
     req = request.Request(target.base_url + "/v1/alerts", data=alert._body, method="POST",
-                          headers={"Authorization": "Bearer " + target.key,
+                          headers={**client_headers(), "Authorization": "Bearer " + target.key,
                                    "Idempotency-Key": alert.idempotency_key,
                                    "Content-Type": "application/json; charset=utf-8"})
     if opener is None:

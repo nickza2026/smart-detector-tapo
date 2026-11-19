@@ -46,6 +46,8 @@ attempts รับ integer 1–3 และ max_elapsed รับเลข finite
 
 ปุ่ม **ประวัติการส่ง Notify** เปิดรายการทุกผลลัพธ์ ทั้ง `success`, `failed` และ `ambiguous` จากการทดสอบ, health และ Worker วัตถุค้าง กดเลือกเพื่อดู URL, request headers/body, HTTP status, response headers/body และรหัสผล ไม่มีปุ่มส่งซ้ำในประวัติ และเปิดอ่านได้ระหว่างเฝ้ากล้อง
 
+คำขอส่ง `User-Agent: SmartTapo/<หมายเลขรุ่น>` ตามรุ่นที่รันจริงและ `Accept: application/json` ไม่ใช้ User-Agent เริ่มต้นของ urllib หรือปลอมเป็น browser ทั้งสอง header แสดงในประวัติด้วย การตอบ `GET /health` เป็น JSON ยืนยันเพียงการเข้าถึง endpoint/configuration ไม่ยืนยันว่า `POST /v1/alerts` ผ่าน authentication หรือมือถือได้รับ/ดัง/รับทราบ
+
 แต่ละ HTTP attempt มีรายการของตัวเอง รวม retry ซึ่งยังใช้ alert ID และ idempotency key เดิม รายการที่เริ่มบันทึกแล้วแต่ process ปิดก่อนรับผลคงเป็น `outcome_unknown` ไม่ตีความว่าเซิร์ฟเวอร์รับแล้วหรือส่งไม่ถึง กรณีเครือข่ายไม่ให้ response จะไม่มี HTTP status/body แทนการเดาข้อความจาก exception
 
 เก็บใน `notify-history.sqlite3` ภายใต้ `data_dir` ที่ยืนยันไว้ ไม่ใช่โฟลเดอร์ทำงานหรือที่เก็บคีย์ ประวัติแต่ละ data directory แยกกันและไม่ย้าย/รวมอัตโนมัติ เก็บย้อนหลัง 30 × 24 ชั่วโมงตามเวลาที่บันทึก รายการหมดอายุไม่ถูกแสดงและถูกทยอยลบครั้งละไม่เกิน 256 ระหว่างเปิดแอป/Worker ทำ cleanup; ขณะปิดโปรแกรมไม่มีงานลบเบื้องหลังของระบบปฏิบัติการ

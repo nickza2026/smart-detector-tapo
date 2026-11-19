@@ -5,6 +5,7 @@ import threading
 import unittest
 from urllib.error import HTTPError
 from unittest.mock import patch
+from smart_tapo.diagnostics import APP_VERSION
 
 from smart_tapo.notify_api import (
     AlertMessage, NotifyTarget, NotifyResult, send_alert, deliver_alert, _NoRedirect,
@@ -87,6 +88,8 @@ class NotifyTests(unittest.TestCase):
             self.assertEqual(req.full_url, "https://unit.invalid/v1/alerts")
             self.assertEqual(json.loads(req.data)["ttl_seconds"], 300)
             self.assertEqual(req.get_header("Authorization"), "Bearer private-test-key")
+            self.assertEqual(req.get_header("User-agent"), "SmartTapo/" + APP_VERSION.removeprefix('v'))
+            self.assertEqual(req.get_header("Accept"), "application/json")
 
     def test_input_boundaries_and_no_implicit_importance(self):
         AlertMessage("a" * 100, "b" * 128, "😀" * 120, "ก" * 2000, "normal", 10800)

@@ -140,7 +140,8 @@ class NotifyHistory:
                 db.close()
 
     def begin(self, target, alert, channel):
-        headers = {'Content-Type': 'application/json; charset=utf-8',
+        from .notify_api import client_headers
+        headers = {**client_headers(), 'Content-Type': 'application/json; charset=utf-8',
                    'Idempotency-Key': redact(alert.idempotency_key, target.key),
                    'Authorization': '[REDACTED]'}
         with self._connection(write=True) as db:

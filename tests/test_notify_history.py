@@ -61,6 +61,9 @@ class HistoryTests(unittest.TestCase):
         self.assertIn('critical',detail['request_body'])
         self.assertIn('unauthorized',detail['response_body'])
         self.assertEqual(detail['request_headers']['Authorization'],'[REDACTED]')
+        from smart_tapo.diagnostics import APP_VERSION
+        self.assertEqual(detail['request_headers']['User-Agent'],'SmartTapo/'+APP_VERSION.removeprefix('v'))
+        self.assertEqual(detail['request_headers']['Accept'],'application/json')
         for path in self.history.root.glob('notify-history.sqlite3*'):
             self.assertNotIn(self.key.encode(),path.read_bytes())
         accepted_detail=self.history.detail(rows[1]['id'])
