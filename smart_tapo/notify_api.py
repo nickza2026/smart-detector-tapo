@@ -1,5 +1,5 @@
 """Bounded Notify API transport. Acceptance is not phone delivery or acknowledgement."""
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 import json
 import math
@@ -16,6 +16,8 @@ _CODES = frozenset("provider_accepted provider_rejected provider_unregistered pr
 class NotifyTarget:
     base_url: str = field(repr=False)
     key: str = field(repr=False)
+    history: object | None = field(default=None, repr=False, compare=False)
+    channel: str = field(default='notify', compare=False)
 
     def __post_init__(self):
         try:
@@ -32,6 +34,8 @@ class NotifyTarget:
                 or any(ord(c) < 32 or ord(c) > 126 for c in self.key)):
             raise ValueError("invalid Notify API key")
         object.__setattr__(self, "base_url", self.base_url.rstrip("/"))
+        if self.channel not in ('notify', 'manual_test', 'health', 'stuck'):
+            raise ValueError('invalid Notify history channel')
 
 
 @dataclass(frozen=True)
@@ -73,6 +77,9 @@ class NotifyResult:
     code: str
     retry_after: float | None = None
     retryable: bool = False
+    # Diagnostic metadata, not a different delivery outcome.
+    http_status: int | None = field(default=None, compare=False)
+    history_saved: bool | None = field(default=None, compare=False)
 
     def __post_init__(self):
         if self.state not in ("success", "failed", "ambiguous") or self.code not in _CODES:
@@ -83,6 +90,11 @@ class NotifyResult:
             raise ValueError("invalid retry delay")
         if type(self.retryable) is not bool:
             raise ValueError("invalid retry flag")
+        if self.http_status is not None and (type(self.http_status) is not int
+                                            or not 100 <= self.http_status <= 599):
+            raise ValueError("invalid HTTP status")
+        if self.history_saved is not None and type(self.history_saved) is not bool:
+            raise ValueError('invalid history status')
 
 
 class _NoRedirect(request.HTTPRedirectHandler):
@@ -154,19 +166,46 @@ def send_alert(target, alert, cancel, *, opener=None):
         opener = request.build_opener(_NoRedirect())
     if cancel.is_set():
         return NotifyResult("failed", "cancelled")
+    started = time.monotonic()
+    identifier = None
+    if target.history is not None:
+        try:
+            identifier = target.history.begin(target, alert, target.channel)
+        except Exception:
+            pass  # Diagnostic failure must never suppress or retry an alarm.
+    status, raw, headers = None, None, None
+    result = NotifyResult('ambiguous', 'network_unknown', retryable=True)
     try:
-        try:
-            response = opener.open(req, timeout=10)
-        except error.HTTPError as exc:
-            response = exc
-        try:
-            return _response(response.code, response.headers,
-                             response.read(MAX_RESPONSE_BYTES + 1), alert)
-        finally:
-            response.close()
+        if cancel.is_set():
+            result = NotifyResult('failed', 'cancelled')
+        else:
+            try:
+                response = opener.open(req, timeout=10)
+            except error.HTTPError as exc:
+                response = exc
+            try:
+                status = response.code
+                headers = response.headers
+                raw = response.read(MAX_RESPONSE_BYTES + 1)
+                result = replace(_response(status, headers, raw, alert), http_status=status)
+            finally:
+                response.close()
     except Exception:
         # Never expose exception strings, URLs, headers or response bodies.
-        return NotifyResult("ambiguous", "network_unknown", retryable=True)
+        result = NotifyResult("ambiguous", "network_unknown", retryable=True)
+    finally:
+        if target.history is not None:
+            saved = False
+            if identifier is not None:
+                try:
+                    target.history.finish(identifier, result,
+                        status if type(status) is int and 100 <= status <= 599 else None,
+                        raw, headers, max(0, int((time.monotonic()-started)*1000)), target.key)
+                    saved = True
+                except Exception:
+                    pass
+            result = replace(result, history_saved=saved)
+    return result
 
 
 def deliver_alert(target, alert, cancel, *, sender=send_alert, clock=time.monotonic,
@@ -184,7 +223,8 @@ def deliver_alert(target, alert, cancel, *, sender=send_alert, clock=time.monoto
             return NotifyResult("ambiguous" if sent else "failed", "cancelled")
         # A full single-attempt timeout must fit once retrying.
         if index and clock() - start + 10 > max_elapsed:
-            return NotifyResult("ambiguous" if sent else "failed", "retry_budget_exhausted")
+            return NotifyResult("ambiguous" if sent else "failed", "retry_budget_exhausted",
+                                http_status=result.http_status, history_saved=result.history_saved)
         result = sender(target, alert, cancel)
         if result.code == "cancelled" and sent:
             return NotifyResult("ambiguous", "cancelled")
@@ -198,4 +238,5 @@ def deliver_alert(target, alert, cancel, *, sender=send_alert, clock=time.monoto
             break
         if cancel.wait(delay):
             return NotifyResult("ambiguous" if sent else "failed", "cancelled")
-    return NotifyResult("ambiguous" if sent else "failed", "retry_budget_exhausted")
+    return NotifyResult("ambiguous" if sent else "failed", "retry_budget_exhausted",
+                        http_status=result.http_status, history_saved=result.history_saved)

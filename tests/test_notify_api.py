@@ -120,6 +120,29 @@ class NotifyTests(unittest.TestCase):
             with self.subTest(update=update):
                 self.assertEqual(self.send(self.receipt(**update)).state, "ambiguous")
 
+    def test_http_status_is_retained_without_raw_provider_error(self):
+        response = Response(401, b'{"error":{"code":"unauthorized","message":"private-test-key"}}')
+        result = self.send(response)
+        self.assertEqual(result.code, 'unauthorized')
+        self.assertEqual(getattr(result, 'http_status', None), 401)
+        self.assertNotIn('private-test-key', repr(result))
+
+    def test_only_integer_http_status_metadata_is_allowed(self):
+        for status in (True, False, '401', 401.0, 99, 600):
+            with self.subTest(status=status), self.assertRaises(ValueError):
+                NotifyResult('failed', 'unauthorized', http_status=status)
+        self.assertIsNone(NotifyResult('ambiguous', 'network_unknown').http_status)
+
+    def test_retry_exhaustion_retains_last_received_http_status(self):
+        opener = Opener(Response(503, b'{"error":{"code":"database_unavailable"}}'),
+                        Response(503, b'{"error":{"code":"database_unavailable"}}'))
+        result = deliver_alert(self.target, self.alert, self.cancel, attempts=2,
+            sender=lambda t,a,c: send_alert(t,a,c,opener=opener), clock=lambda: self.cancel.now)
+        self.assertEqual(result.state, 'ambiguous')
+        self.assertEqual(result.code, 'retry_budget_exhausted')
+        self.assertEqual(result.http_status, 503)
+        self.assertEqual(len(opener.requests), 2)
+
     def test_invalid_json_oversize_and_bounded_read(self):
         for body in (b"", b"[]", b"null", b"bad-private-test-key", b"{" * 65537):
             response = Response(202, body)

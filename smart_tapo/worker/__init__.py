@@ -36,16 +36,19 @@ LOG = logging.getLogger(__name__)
 NOTIFY_TITLE = 'SmartTapo: สงสัยธนบัตร/วัตถุค้าง'
 
 
-def notify_sender(config, cancel):
+def notify_sender(config, cancel, *, history=None):
     """Notify API sender bound to config; key comes only from NOTIFY_API_KEY.
 
     Stuck objects are always critical (alarm until acknowledged on the phone).
     sender(message, notification_id) retries one immutable event (same alert ID
     and Idempotency-Key). success is provider acceptance, never phone delivery.
     """
+    from smart_tapo.notify_history import NotifyHistory
+    history = history if history is not None else NotifyHistory(config.data_dir)
     def send(message, notification):
         try:
-            target = NotifyTarget(config.notify_api_url, os.environ.get('NOTIFY_API_KEY', ''))
+            target = NotifyTarget(config.notify_api_url, os.environ.get('NOTIFY_API_KEY', ''),
+                                  history=history, channel='stuck')
             alert = AlertMessage(notification, 'smarttapo:stuck:' + notification, NOTIFY_TITLE,
                                  message, 'critical')
         except ValueError:
@@ -71,7 +74,9 @@ class Worker:
             detector = Detector(config)
         self.detector = detector
         self._send_cancel = threading.Event()
-        self.sender = sender or notify_sender(config, self._send_cancel)
+        from smart_tapo.notify_history import NotifyHistory
+        self._notify_history = NotifyHistory(config.data_dir)
+        self.sender = sender or notify_sender(config, self._send_cancel, history=self._notify_history)
         if config.data_dir.is_symlink() or any((config.data_dir / name).is_symlink() for name in ('worker.sqlite3', 'worker.sqlite3-wal', 'worker.sqlite3-shm')):
             raise ValueError('Worker data and database must not be symlinks')
         config.data_dir.mkdir(parents=True, exist_ok=True)
@@ -754,6 +759,10 @@ class Worker:
 
     def cleanup(self):
         now = self.clock()
+        try:
+            self._notify_history.prune()
+        except Exception:
+            pass  # A diagnostic write/cleanup must not suppress occupancy work.
         root = self.config.data_dir / 'frames' / self.config.camera_id
         with self.db:
             if not self._memory_mode:

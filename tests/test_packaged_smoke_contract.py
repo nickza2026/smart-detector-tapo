@@ -23,6 +23,8 @@ def synthetic_report():
         rtsp_audio_backend=True, rtsp_pcm_real_decoder=True,
         rtsp_audio_started_first=True, rtsp_audio_stopped_reaped=True,
         notify_test_fake_only=True, real_notifications=0,
+        notify_history_gui=True, notify_history_both_outcomes=True,
+        notify_history_redacted=True, notify_history_fake_only=True,
         real_windows_audio=False, real_adb=False, real_user_stream=False,
         external_delivery=False, webhook_real_http=False,
     )

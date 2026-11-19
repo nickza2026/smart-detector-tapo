@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import os
 import subprocess
 import tkinter as tk
 import unittest
@@ -33,6 +34,23 @@ class FakeController:
 
 
 class DesktopGuiTests(unittest.TestCase):
+    def test_notify_history_button_is_visible_at_minimum_size_on_every_tab(self):
+        self.root.deiconify()
+        for width,height in ((850,650),(1000,678),(1000,820)):
+            self.root.geometry(f'{width}x{height}')
+            for tab in self.app.notebook.tabs():
+                with self.subTest(size=(width,height),tab=tab):
+                    self.app.notebook.select(tab)
+                    self.root.update()
+                    button=self.app.notify_history_button
+                    self.assertTrue(button.winfo_ismapped())
+                    x=button.winfo_rootx()-self.root.winfo_rootx()
+                    y=button.winfo_rooty()-self.root.winfo_rooty()
+                    self.assertGreaterEqual(button.winfo_width(),100)
+                    self.assertGreaterEqual(x,0);self.assertGreaterEqual(y,0)
+                    self.assertLessEqual(x+button.winfo_width(),self.root.winfo_width())
+                    self.assertLessEqual(y+button.winfo_height(),self.root.winfo_height())
+
     def test_endpoint_metadata_mode_skips_config_gui_and_registration(self):
         import json
         report=Path(self.temp.name)/'endpoint-metadata.json'
@@ -123,6 +141,9 @@ class DesktopGuiTests(unittest.TestCase):
         self.assertFalse((self.app.config.data_dir/'refueling'/'refueling.sqlite3').exists())
         self.assertFalse(self.app.audio_panel.is_running)
     def setUp(self):
+        if os.name=='nt':
+            from smart_tapo import smoke_window
+            smoke_window.install()
         self.temp=tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root=tk.Tk();self.root.withdraw()
@@ -130,6 +151,7 @@ class DesktopGuiTests(unittest.TestCase):
         self.store=DesktopStore(Path(self.temp.name)/'config.json')
         self.controller=FakeController()
         self.app=DesktopApp(self.root,self.store,self.controller)
+        self.addCleanup(self.app._notify_history_maintenance.close)
         self.addCleanup(lambda:self.root.after_cancel(self.app.timer))
         self.errors=self.enterContext(patch('smart_tapo.desktop.messagebox.showerror'))
         self.confirm=self.enterContext(patch('smart_tapo.desktop.messagebox.askyesno',return_value=True))

@@ -1,6 +1,6 @@
 """Bounded public diagnostic vocabulary; never format arbitrary provider data."""
 
-DIAGNOSTIC_BUILD = '2026-11-19.56'
+DIAGNOSTIC_BUILD = '2026-11-19.57'
 APP_VERSION = 'v' + DIAGNOSTIC_BUILD.rsplit('.', 1)[1]
 
 OBSERVATION_ERROR_HINTS = {

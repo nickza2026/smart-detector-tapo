@@ -3,6 +3,7 @@ import time
 import tkinter as tk
 import unittest
 from concurrent.futures import Future
+import json
 from unittest.mock import Mock, patch
 
 from smart_tapo import desktop_notify_test as mod
@@ -63,7 +64,7 @@ class PanelTests(unittest.TestCase):
         self.sender.assert_not_called()
         self.assertFalse(self.panel.is_running)
 
-    def test_reentrant_confirmation_snapshots_single_normal_send(self):
+    def test_reentrant_confirmation_snapshots_single_critical_send(self):
         def confirm():
             self.panel.start()
             self.credentials[:] = ['changed-key', 'https://changed.invalid']
@@ -75,10 +76,27 @@ class PanelTests(unittest.TestCase):
         self.sender.assert_called_once()
         target, alert, cancel = self.sender.call_args.args
         self.assertEqual((target.key, target.base_url), ('secret-key', 'https://notify.invalid'))
-        self.assertEqual(alert.importance, 'normal')
+        self.assertEqual(alert.importance, 'critical')
+        self.assertEqual(json.loads(alert._body)['importance'], 'critical')
         self.assertIn('TEST', alert.title)
         self.assertFalse(cancel.is_set())
         self.assertEqual(self.panel.status.get(), mod.RESULTS['success'])
+
+    def test_failed_receipt_exposes_safe_error_code_not_credentials(self):
+        self.sender.return_value = NotifyResult('failed', 'unauthorized')
+        self.panel.start()
+        self.drain()
+        text = self.panel.status.get()
+        self.assertIn('unauthorized', text)
+        self.assertNotIn('secret-key', text)
+        self.assertNotIn('https://notify.invalid', text)
+
+    def test_critical_test_button_and_confirmation_warn_about_human_ack(self):
+        self.assertIn('critical', self.panel.button.cget('text'))
+        self.assertNotIn('normal', self.panel.button.cget('text'))
+        self.assertIn('critical', mod.CONFIRMATION)
+        self.assertIn('รับทราบ', mod.CONFIRMATION)
+        self.assertIn('ต่อเนื่อง', mod.CONFIRMATION)
 
     def test_inflight_close_drains_no_retry_no_raw_error(self):
         entered, release = threading.Event(), threading.Event()
@@ -95,7 +113,7 @@ class PanelTests(unittest.TestCase):
         self.assertNotIn('secret', self.panel.status.get())
         release.set()
         self.drain()
-        self.assertEqual(self.panel.status.get(), mod.RESULTS['failed'])
+        self.assertEqual(self.panel.status.get(), mod.CLIENT_ERROR)
         self.assertIn('disabled', self.panel.button.state())
 
     def test_queued_close_cancels_before_send(self):
@@ -106,6 +124,36 @@ class PanelTests(unittest.TestCase):
         self.assertTrue(future.cancelled())
         self.assertFalse(self.panel.is_running)
         self.sender.assert_not_called()
+
+    def test_failure_http_status_is_visible_and_duplicate_action_is_not_sent(self):
+        self.sender.return_value = NotifyResult('failed', 'unauthorized', http_status=401)
+        self.panel.start()
+        self.panel.start()
+        self.drain()
+        self.sender.assert_called_once()
+        self.assertIn('HTTP 401', self.panel.status.get())
+        self.assertIn('unauthorized', self.panel.status.get())
+
+    def test_unknown_or_malformed_result_cannot_leak_provider_data(self):
+        from types import SimpleNamespace
+        invalid = NotifyResult('failed', 'unauthorized')
+        object.__setattr__(invalid, 'code', 'secret-key https://notify.invalid')
+        for result in (None, invalid, SimpleNamespace(state='failed', code='secret-key')):
+            with self.subTest(result=type(result).__name__):
+                self.sender.return_value = result
+                self.panel.start()
+                self.drain()
+                self.assertEqual(self.panel.status.get(), mod.CLIENT_ERROR)
+                self.assertNotIn('secret-key', self.panel.status.get())
+                self.assertNotIn('https://', self.panel.status.get())
+
+    def test_error_diagnostics_preserve_unknown_delivery_warning(self):
+        self.sender.return_value = NotifyResult('ambiguous', 'database_unavailable', http_status=503)
+        self.panel.start()
+        self.drain()
+        self.assertIn(mod.RESULTS['ambiguous'], self.panel.status.get())
+        self.assertIn('HTTP 503', self.panel.status.get())
+        self.assertIn('database_unavailable', self.panel.status.get())
 
     def test_fake_smoke_route(self):
         with patch('smart_tapo.notify_api.request.build_opener', side_effect=AssertionError('HTTP forbidden')):

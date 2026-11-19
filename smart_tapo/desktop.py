@@ -27,6 +27,8 @@ from .desktop_history import HistoryPanel
 from .desktop_rtsp_audio import RtspAudioPanel
 from .desktop_startup import StartupPanel
 from .desktop_notify_test import NotifyTestPanel
+from .desktop_notify_history import NotifyHistoryButton
+from .notify_history import NotifyHistory, NotifyHistoryMaintenance
 from .desktop_refueling import RefuelingHistoryPanel
 from .desktop_webhook import WebhookPanel
 from .diagnostics import APP_VERSION, DIAGNOSTIC_BUILD
@@ -42,6 +44,8 @@ class DesktopApp:
         self.config = store.load_or_create()
         from .desktop_rtsp import image_config
         self.config,self._source_migrated=image_config(self.config)
+        self._notify_history = NotifyHistory(self.config.data_dir)
+        self._notify_history_maintenance = NotifyHistoryMaintenance(self._notify_history)
         self.jobs = queue.Queue(maxsize=20)
         self.busy = False
         self.operation_stop = threading.Event()
@@ -69,7 +73,11 @@ class DesktopApp:
         style.configure('Subheading.TLabel', font=('Segoe UI', 11, 'bold'))
         outer = ttk.Frame(root, padding=16)
         outer.pack(fill='both', expand=True)
-        ttk.Label(outer, text='Smart Tapo', style='Heading.TLabel').pack(anchor='w')
+        header=ttk.Frame(outer)
+        header.pack(fill='x')
+        ttk.Label(header, text='Smart Tapo', style='Heading.TLabel').pack(side='left')
+        self.notify_history_button=NotifyHistoryButton(header,lambda:self._notify_history)
+        self.notify_history_button.pack(side='right')
         ttk.Label(outer, text='RTSP ภาพ → ยืนยันภาพช่องว่าง → Capture / Worker • เสียง RTSP แยก process').pack(anchor='w', pady=(3, 12))
         self.notebook = ttk.Notebook(outer)
         self.notebook.pack(fill='both', expand=True)
@@ -126,7 +134,7 @@ class DesktopApp:
         if self._credential_error:
             self.status.set('อ่านคีย์ที่เข้ารหัสไม่ได้ กรุณากรอกคีย์ใหม่บนบัญชี Windows นี้; ไฟล์เดิมยังไม่ถูกลบ')
         from .desktop_health_alerts import HealthAlertSupervisor
-        self.health_alerts = HealthAlertSupervisor()
+        self.health_alerts = HealthAlertSupervisor(history=self._notify_history)
         self.audio_panel.listener_panel.on_health_stop = self._poll_health
         self.timer = self.root.after(200, self._poll)
 
@@ -206,7 +214,8 @@ class DesktopApp:
         ttk.Button(actions,text='ล้างคีย์ที่บันทึกไว้',command=self.clear_keys).pack(side='left',padx=(0,8))
         ttk.Button(actions,text='เปิดโฟลเดอร์ข้อมูล',command=self.open_folder).pack(side='left')
         ttk.Button(actions,text='โฟลเดอร์ตั้งค่า',command=self.open_config_folder).pack(side='left')
-        self.notify_test_panel=NotifyTestPanel(actions,lambda:(self.notify_key.get(),self.notify_base.get()))
+        self.notify_test_panel=NotifyTestPanel(actions,lambda:(self.notify_key.get(),self.notify_base.get()),
+                                             history=self._notify_history)
         self.notify_test_panel.pack(side='left',padx=(10,0))
 
         self._entry(body,14,'capture_interval_seconds','ช่วงรับภาพ (วินาที)',self.config.capture_interval_seconds)
@@ -462,6 +471,9 @@ class DesktopApp:
 
     def _storage_busy(self, *, include_history=True):
         if getattr(self,'closing',False) or self.busy or self._active() or self._audio_active():
+            return True
+        maintenance=getattr(self,'_notify_history_maintenance',None)
+        if maintenance is not None and maintenance.is_running:
             return True
         for name in ('startup_panel','audio_panel','offline_audio_panel','webhook_panel',
                      'refueling_panel','notify_test_panel'):
@@ -1045,6 +1057,8 @@ class DesktopApp:
         lock_settings(self.settings)
         self.storage_picker.configure(state='disabled' if self._storage_busy() else 'normal')
         self.notify_test_panel.poll()
+        self.notify_history_button.configure(state='disabled' if self.closing else 'normal')
+        self._notify_history_maintenance.poll()
         for widget in (self.capture_ref_button,self.load_ref_button,self.save_ref_button,self.confirm_box,
                        self.apply_roi_button,*self.roi_entries):
             widget.configure(state='disabled' if active or self.busy or self.closing else 'normal')
@@ -1100,6 +1114,8 @@ class DesktopApp:
         self.audio_panel.close()
         self.offline_audio_panel.close()
         self.notify_test_panel.close()
+        if hasattr(self,'notify_history_button'):self.notify_history_button.close()
+        if hasattr(self,'_notify_history_maintenance'):self._notify_history_maintenance.close()
         self.operation_stop.set()
         self.controller.stop_all()
 
@@ -1121,6 +1137,8 @@ def smoke_gui(report_path,*,audio_cases=None):
         try:
             app=DesktopApp(root,DesktopStore(Path(directory)/'config.json'))
             result=_smoke_gui_flow(root,app)
+            from .desktop_notify_history import smoke_notify_history
+            result.update(smoke_notify_history(root,app))
             if os.name=='nt':
                 url,camera=app.config.notify_api_url,app.config.camera_id
                 app.store.save_notify_key('synthetic-smoke-key',url,camera)

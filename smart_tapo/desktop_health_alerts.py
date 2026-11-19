@@ -52,7 +52,7 @@ def _alert_id(notice):
     return 'health-' + scope + '-' + str(int(notice.serial))
 
 
-def send_health(key, base_url, notice, cancel, importance='normal'):
+def send_health(key, base_url, notice, cancel, importance='normal', *, history=None):
     """POST one safe notice; return success/failed/ambiguous, never raw errors.
 
     success means Notify API provider acceptance, NOT phone delivery or Ack.
@@ -64,7 +64,7 @@ def send_health(key, base_url, notice, cancel, importance='normal'):
     if credentials is None or cancel.is_set():
         return 'failed'
     try:
-        target = NotifyTarget(credentials[1], credentials[0])
+        target = NotifyTarget(credentials[1], credentials[0], history=history, channel='health')
         alert_id = _alert_id(notice)
         alert = AlertMessage(alert_id, 'smarttapo:' + alert_id, _TITLE, format_notice(notice),
                              'normal' if notice.kind == 'recovered' else importance)
@@ -88,7 +88,10 @@ class HealthAlertSupervisor:
     stop/scope changes cancel and ignore that result instead. An already-open
     HTTP request is irrevocable. Sender MUST check cancel before opening HTTP.
     """
-    def __init__(self, sender=send_health, clock=time.monotonic):
+    def __init__(self, sender=send_health, clock=time.monotonic, *, history=None):
+        if history is not None and sender is send_health:
+            from functools import partial
+            sender = partial(send_health, history=history)
         self._sender = sender
         self._clock = clock
         self._lock = threading.Lock()

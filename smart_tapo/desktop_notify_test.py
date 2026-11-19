@@ -1,30 +1,47 @@
-"""Explicit, cancellable NORMAL-only Notify API test; no startup delivery."""
+"""Explicit, cancellable CRITICAL Notify API test; no startup delivery."""
 from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 from uuid import uuid4
-from .notify_api import NotifyTarget, AlertMessage, deliver_alert
+from .notify_api import NotifyTarget, AlertMessage, NotifyResult, deliver_alert
 
-CONFIRMATION = ('ส่ง Notify API จริงหนึ่งรายการแบบ normal (เงียบ)?\n'
-                'ไม่ใช่เหตุการณ์กล้องจริง และ normal ไม่หยุด critical ที่ดังต่อเนื่องจนมนุษย์รับทราบ\n'
-                'คำขอที่เริ่มแล้วอาจเรียกคืนไม่ได้')
+CONFIRMATION = ('ส่ง Notify API จริงหนึ่งรายการแบบ critical?\n'
+                'นี่เป็นการทดสอบ ไม่ใช่เหตุการณ์กล้องจริง มือถืออาจปลุกต่อเนื่องจนกดรับทราบในมือถือ\n'
+                'การยกเลิกหรือปิดหน้าต่างนี้ไม่หยุดเสียง และคำขอที่เริ่มแล้วอาจเรียกคืนไม่ได้')
 RESULTS = {
     'success': 'ผู้ให้บริการรับคำขอแล้ว ไม่ยืนยันว่ามือถือได้รับ/เสียง/การรับทราบ',
     'failed': 'ผู้ให้บริการยังไม่ยืนยันรับคำขอ Notify API',
     'ambiguous': 'ไม่ทราบแน่ชัดว่าได้รับหรือไม่ อาจส่งแล้ว โปรดตรวจสอบก่อนกดอีกครั้ง',
 }
+CLIENT_ERROR = RESULTS['ambiguous'] + ' (client_error)'
+
+
+def format_result(result):
+    """Render only the transport's validated enum/integer; never raw errors."""
+    if type(result) is not NotifyResult:
+        return CLIENT_ERROR
+    try:
+        safe = NotifyResult(result.state, result.code, http_status=result.http_status)
+    except Exception:
+        return CLIENT_ERROR
+    warning = ' • บันทึกประวัติไม่สำเร็จ' if result.history_saved is False else ''
+    if safe.state == 'success':
+        return RESULTS['success'] + warning
+    status = f'HTTP {safe.http_status}; ' if safe.http_status is not None else ''
+    return RESULTS[safe.state] + f' ({status}{safe.code})' + warning
 
 
 class NotifyTestPanel(ttk.Frame):
-    def __init__(self, parent, credentials_getter, *, sender=deliver_alert, confirm=None):
+    def __init__(self, parent, credentials_getter, *, sender=deliver_alert, confirm=None, history=None):
         super().__init__(parent)
         self.credentials_getter = credentials_getter
         self.sender = sender
+        self.history = history
         self.confirm = confirm if confirm is not None else self._confirm
         self.status = tk.StringVar(self, '')
-        self.button = ttk.Button(self, text='ทดสอบ Notify API จริง (normal เงียบ)', command=self.start)
+        self.button = ttk.Button(self, text='ทดสอบ Notify API จริง (critical)', command=self.start)
         self.button.pack(anchor='w')
         ttk.Label(self, textvariable=self.status, wraplength=300).pack(anchor='w')
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='notify-test')
@@ -47,7 +64,7 @@ class NotifyTestPanel(ttk.Frame):
         try:
             try:
                 key, base = self.credentials_getter()
-                target = NotifyTarget(base.strip(), key.strip())
+                target = NotifyTarget(base.strip(), key.strip(), history=self.history, channel='manual_test')
             except Exception:
                 self.status.set('กรุณาระบุ Notify API Base URL และ API Key ที่ถูกต้อง')
                 return
@@ -57,12 +74,12 @@ class NotifyTestPanel(ttk.Frame):
             if self._closing:
                 return
             alert = AlertMessage(str(uuid4()), str(uuid4()), 'SmartTapo TEST',
-                'TEST ทดสอบเท่านั้น ไม่ใช่เหตุการณ์กล้องจริง', 'normal')
+                'TEST ทดสอบเท่านั้น ไม่ใช่เหตุการณ์กล้องจริง กดรับทราบในมือถือเพื่อหยุดเสียง', 'critical')
             self._cancel = threading.Event()
-            self.status.set('กำลังส่งรายการทดสอบจริงแบบ normal…')
+            self.status.set('กำลังส่งรายการทดสอบจริงแบบ critical…')
             self._future = self._executor.submit(self.sender, target, alert, self._cancel)
         except Exception:
-            self.status.set(RESULTS['failed'])
+            self.status.set('เริ่มทดสอบไม่สำเร็จ (client_error)')
         finally:
             self._confirming = False
             if not self._closing and self._future is None:
@@ -72,12 +89,11 @@ class NotifyTestPanel(ttk.Frame):
         future = self._future
         if future is not None and future.done():
             try:
-                result = future.result()
-                state = result.state
+                text = format_result(future.result())
             except Exception:
-                state = 'failed'
+                text = CLIENT_ERROR
             self._future = None
-            self.status.set(RESULTS.get(state, RESULTS['failed']))
+            self.status.set(text)
         self.button.state(['disabled'] if self._closing or self.is_running else ['!disabled'])
 
     def close(self):
@@ -121,10 +137,10 @@ def smoke_notify_test(root, panel):
             if panel.is_running:
                 raise RuntimeError('Fake Notify smoke did not drain')
             results.append(panel.status.get())
-        return dict(notify_test_gui=results == [RESULTS['success'], RESULTS['ambiguous']],
+        return dict(notify_test_gui=results == [RESULTS['success'], format_result(NotifyResult('ambiguous', 'network_unknown'))],
                     notify_test_single_action=len(calls) == 2,
                     notify_test_redacted_result=all('synthetic-smoke' not in s for s in results),
-                    notify_test_fake_only=len(calls) == 2 and all(t.key == 'synthetic-smoke-key' and t.base_url == 'https://notify.invalid' and a.importance == 'normal' for t, a in calls))
+                    notify_test_fake_only=len(calls) == 2 and all(t.key == 'synthetic-smoke-key' and t.base_url == 'https://notify.invalid' and a.importance == 'critical' for t, a in calls))
     finally:
         panel.credentials_getter, panel.sender, panel.confirm, status = saved
         panel.status.set(status)
