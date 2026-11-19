@@ -1,8 +1,4 @@
 {
-  "notification_priority": 1,
-  "emergency_retry_seconds": 60,
-  "emergency_expire_seconds": 10800,
-  "emergency_poll_seconds": 10,
   "history_web_port": 8080,
   "camera_id": "cabinet-1",
   "data_dir": "data",
@@ -18,6 +14,9 @@
   "max_live_age_seconds": 5,
   "poll_interval_seconds": 0.25,
   "notify_enabled": false,
+  "health_notify_enabled": true,
+  "health_failure_seconds": 30,
+  "health_repeat_seconds": 900,
   "reminder_interval_seconds": 60,
   "difference_threshold": 15,
   "changed_pixel_ratio": 0.12,

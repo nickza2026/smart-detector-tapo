@@ -26,6 +26,30 @@ def textured_reference(config):
 
 
 class AlignmentRegressionTests(unittest.TestCase):
+    def test_far_full_hd_texture_does_not_starve_local_static_anchors(self):
+        import cv2
+        import numpy as np
+        from smart_tapo.config import Rect
+        cfg=replace(self.config,expected_size=(1920,1080),video=Rect(0,0,1920,1080),
+                    roi=Rect(844,471,255,196),clock_roi=Rect(0,0,280,21))
+        rng=np.random.default_rng(4451)
+        gray=rng.integers(0,256,(1080,1920),dtype=np.uint8)
+        center=(972,569)
+        cv2.circle(gray,center,480,110,-1)
+        # Valid but weaker cabinet texture on all four sides is crowded out by
+        # unrelated high-contrast distant detail in a global 3000-feature pool.
+        for x,y in ((782,569),(1162,569),(972,379),(972,759)):
+            patch=rng.integers(90,151,(16,16),dtype=np.uint8)
+            gray[y-24:y+24,x-24:x+24]=cv2.resize(patch,(48,48),interpolation=cv2.INTER_NEAREST)
+        gray[471:667,844:1099]=70
+        reference=Image.fromarray(gray).convert('RGB');reference.save(cfg.baseline_path)
+        before=cfg.baseline_path.read_bytes()
+        detector=Detector(cfg)
+        observation=detector.observe_image(reference.copy())
+        self.assertEqual(observation.label,'EMPTY',observation.alignment_reason)
+        self.assertGreaterEqual(observation.alignment_inliers,cfg.alignment_min_inliers)
+        self.assertEqual(cfg.baseline_path.read_bytes(),before)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

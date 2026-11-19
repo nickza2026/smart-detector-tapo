@@ -3,10 +3,13 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import time
+from dataclasses import replace
 
 from smart_tapo.config import load_config
 from smart_tapo.runtime import ProcessLock, stop_event
 from smart_tapo.worker import Worker
+from smart_tapo.desktop_controller import audit_session
 
 
 def main():
@@ -20,9 +23,9 @@ def main():
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     try:
-        config = load_config(args.config)
+        config = replace(load_config(args.config),capture_backend='rtsp').validate()
         config.data_dir.mkdir(parents=True, exist_ok=True)
-        with ProcessLock(config.data_dir / 'worker.lock'):
+        with ProcessLock(config.data_dir / 'worker.lock'), audit_session(config.data_dir, 'worker') as log:
             if args.calibrate:
                 from smart_tapo.calibrate import save_calibration
                 preview = save_calibration(config, args.calibrate, args.confirm_empty, args.replace)
@@ -35,6 +38,7 @@ def main():
                     print(json.dumps(rows, ensure_ascii=False, indent=2))
                     return 0
                 with stop_event() as stop:
+                    log._send('ready', None, time.time())
                     while not stop.is_set():
                         worker.scan()
                         if args.once:
@@ -42,6 +46,7 @@ def main():
                         stop.wait(config.poll_interval_seconds)
             finally:
                 worker.close()
+            log._send('stopped', None, time.time())
         return 0
     except (OSError, ValueError, RuntimeError) as error:
         logging.error('%s', error)

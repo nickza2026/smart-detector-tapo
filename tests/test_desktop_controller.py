@@ -1,4 +1,5 @@
 import logging
+import json
 import os
 import queue
 import tempfile
@@ -14,6 +15,17 @@ from smart_tapo.runtime import ProcessLock
 
 
 class DesktopControllerTests(unittest.TestCase):
+    def test_capture_messages_do_not_claim_per_frame_clock_change_or_adb_cause(self):
+        messages=queue.Queue()
+        messages.put(('capture','frame_context',{'sequence':1,'fresh':True}))
+        messages.put(('capture','connection'))
+        self.controller._roles['capture']['messages']=messages
+        text='\n'.join(self.controller.drain_messages())
+        self.assertIn('ผ่านเกณฑ์ความสด=True',text)
+        self.assertNotIn('clock เปลี่ยน=',text)
+        self.assertIn('รับ/ยืนยันภาพไม่ผ่าน',text)
+        self.assertIn('จะลองใหม่',text)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -50,6 +62,8 @@ class DesktopControllerTests(unittest.TestCase):
         self.assertIsNone(self.controller.snapshot()['worker']['pid'])
         self.assertEqual(self.controller.snapshot()['capture']['state'], 'stopped')
         self.assertFalse(self.controller.is_running('worker'))
+        rows = [json.loads(line) for line in (self.config.data_dir/'logs/worker.jsonl').read_text(encoding='utf-8').splitlines()]
+        self.assertEqual(rows[-1]['kind'], 'failed')
 
     def test_real_spawn_worker_stop_and_duplicate(self):
         from PIL import Image
@@ -63,6 +77,9 @@ class DesktopControllerTests(unittest.TestCase):
         self.assertTrue(self.controller.is_running('worker'))
         self.assertEqual(self.wait_state('worker', {'stopped', 'failed'}), 'stopped')
         self.assertTrue((config.data_dir / 'worker.sqlite3').exists())
+        rows = [json.loads(line) for line in (config.data_dir / 'logs/worker.jsonl').read_text(encoding='utf-8').splitlines()]
+        self.assertEqual([row['kind'] for row in rows], ['ready', 'stopped'])
+        self.assertTrue(all(row['timestamp'].endswith('+07:00') for row in rows))
 
     def test_existing_worker_lock_not_stolen(self):
         with ProcessLock(self.config.data_dir / 'worker.lock'):
@@ -73,7 +90,7 @@ class DesktopControllerTests(unittest.TestCase):
 
     def test_credential_requirement_and_safe_start_failure(self):
         with self.assertRaises(ValueError):
-            self.controller.start_worker(replace(self.config, notify_enabled=True), 'secret', '')
+            self.controller.start_worker(replace(self.config, notify_enabled=True), '')
         with patch.object(self.controller._context, 'Process', side_effect=RuntimeError('secret')):
             self.assertFalse(self.controller.start_worker(self.config))
         self.assertNotIn('secret', repr(self.controller.drain_messages()))
@@ -90,17 +107,18 @@ class DesktopControllerTests(unittest.TestCase):
         class FakeWorker:
             def __init__(self, config):
                 self.assert_environment = None
-                if 'PUSHOVER_TOKEN' in os.environ or 'PUSHOVER_USER' in os.environ:
+                if 'NOTIFY_API_KEY' in os.environ:
                     raise AssertionError('ambient credentials retained')
             def close(self):
                 pass
-        with patch.dict(os.environ, {'PUSHOVER_TOKEN': 'ambient-secret', 'PUSHOVER_USER': 'ambient-user'}):
+        with patch.dict(os.environ, {'NOTIFY_API_KEY': 'ambient-secret'}):
             with patch('smart_tapo.worker.Worker', FakeWorker):
-                _child('worker', self.config, stop, messages, 'ignored-secret', 'ignored-user')
+                _child('worker', self.config, stop, messages, 'ignored-secret')
         values = []
         while not messages.empty():
             values.append(messages.get_nowait())
-        self.assertIn(('worker', 'ready'), values)
+        self.assertIn(('worker', 'ready'), [item[:2] for item in values])
+        self.assertTrue(all(len(item) == 4 and isinstance(item[3], (int,float)) for item in values))
         self.assertNotIn('secret', repr(values))
 
     def test_stop_idle_and_role_validation(self):

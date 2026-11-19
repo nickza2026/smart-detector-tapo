@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import io
+import os
 import tempfile
+import threading
 import unittest
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from PIL import Image
 from smart_tapo.config import Config, Rect
 from smart_tapo.frames import publish_frame, read_frame
-from smart_tapo.worker import Worker
+from smart_tapo.notify_api import NotifyResult
+from smart_tapo.worker import Worker, notify_sender
 
 
 class WorkerTests(unittest.TestCase):
@@ -117,15 +121,16 @@ class WorkerTests(unittest.TestCase):
         self.worker.close()
         self.config = replace(self.config, notify_enabled=True, stuck_consecutive_frames=2)
         sent = []
-        self.worker = self.make_worker(lambda message: sent.append(message) or 'success')
+        self.worker = self.make_worker(lambda message, notification: sent.append((message, notification)) or 'success')
         self.frame(1)
         self.frame(2)
         self.worker.drain(wait=True)
         success = self.worker.active()['last_success']
         self.assertIsNotNone(success)
-        self.assertIn('Suspected banknote/object stuck', sent[0])
+        self.assertIn('Suspected banknote/object stuck', sent[0][0])
+        self.assertEqual(sent[0][1], self.notifications()[0]['id'])
         self.worker.close()
-        self.worker = self.make_worker(lambda _: self.fail('unexpected send'))
+        self.worker = self.make_worker(lambda *_: self.fail('unexpected send'))
         self.assertEqual(self.worker.count, 0)
         self.frame(3)
         self.assertEqual(self.worker.active()['last_success'], success)
@@ -137,7 +142,7 @@ class WorkerTests(unittest.TestCase):
         for result in ('failed', 'ambiguous'):
             self.worker.close()
             self.config = replace(self.config, notify_enabled=True, stuck_consecutive_frames=1)
-            self.worker = self.make_worker(lambda _: result)
+            self.worker = self.make_worker(lambda *_, result=result: result)
             self.now += 61
             self.frame(1, session=result)
             self.worker.drain(wait=True)
@@ -161,6 +166,38 @@ class WorkerTests(unittest.TestCase):
             self.make_worker()
         self.config = replace(self.config, camera_id='cabinet-1')
         self.worker = self.make_worker()
+
+
+class NotifySenderTests(unittest.TestCase):
+    def setUp(self):
+        self.config = Config(data_dir=Path('unused'), baseline_path=Path('unused.png'),
+                             notify_api_url='https://notify.invalid', notify_importance='normal')
+        self.cancel = threading.Event()
+        self.calls = []
+
+    def deliver(self, target, alert, cancel):
+        self.calls.append((target, alert, cancel))
+        return NotifyResult('success', 'provider_accepted')
+
+    def test_stuck_is_always_critical_with_event_identity_and_env_key(self):
+        with patch.dict(os.environ, {'NOTIFY_API_KEY': 'synthetic-key'}), \
+                patch('smart_tapo.worker.deliver_alert', side_effect=self.deliver):
+            result = notify_sender(self.config, self.cancel)('stuck: cabinet-1', 'a' * 32)
+        self.assertEqual(result, 'success')
+        target, alert, cancel = self.calls[0]
+        self.assertEqual((target.base_url, target.key), ('https://notify.invalid', 'synthetic-key'))
+        self.assertEqual(alert.alert_id, 'a' * 32)
+        self.assertEqual(alert.idempotency_key, 'smarttapo:stuck:' + 'a' * 32)
+        self.assertEqual(alert.importance, 'critical')
+        self.assertEqual(alert.message, 'stuck: cabinet-1')
+        self.assertIs(cancel, self.cancel)
+
+    def test_missing_key_fails_without_transport(self):
+        environment = {k: v for k, v in os.environ.items() if k != 'NOTIFY_API_KEY'}
+        with patch.dict(os.environ, environment, clear=True), \
+                patch('smart_tapo.worker.deliver_alert', side_effect=self.deliver):
+            self.assertEqual(notify_sender(self.config, self.cancel)('stuck', 'a' * 32), 'failed')
+        self.assertEqual(self.calls, [])
 
 
 if __name__ == '__main__':

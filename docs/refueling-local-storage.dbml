@@ -1,0 +1,114 @@
+// Current local v1 implementation, not the dashboard database.
+// Only disposable tests have initialized this schema. No user DB migration.
+// Dedicated data_dir/refueling/refueling.sqlite3, one camera owner in meta.
+// Future Live provenance/association integration is NOT implemented by this ERD.
+
+Table meta {
+  key text [pk]
+  value text [not null, note: 'JSON owner/checkpoint and non-personal cleanup counters; no credentials']
+}
+
+Table sessions {
+  id text [pk]
+  created real [not null, note: 'First local creation; all round data expires at created+259200 seconds']
+  data text [not null, note: 'Aggregate projection, committed with canonical observations/issues and checkpoint']
+  started_at real [not null]
+  last_ready_at real [not null]
+  ended_at real [note: 'NULL until actual thank-you, never synthesized by timeout']
+  ready_count integer [not null]
+  revision integer [not null]
+  has_issue integer [not null]
+  indexes {
+    created
+    (started_at, id)
+  }
+  Note: 'SQLite partial unique index one_open_round ON sessions((1)) WHERE ended_at IS NULL; camera scope belongs to the dedicated store, not caller input. Scalar columns are indexed list/cleanup projections.'
+}
+
+Table observations {
+  source_key text [pk]
+  created real [not null]
+  session_id text
+  reason text [note: 'NULL for accepted input; diagnostics for overlap/stale/orphan input, not another paid round']
+  kind text [not null]
+  started_at real [not null]
+  ended_at real [not null]
+  indexes {
+    session_id
+    created
+  }
+  Note: 'Canonical source span retained independently of the latest checkpoint. Caller must gate Live provenance before accept; no source listener currently authorizes real input.'
+}
+
+Table issues {
+  session_id text [not null, ref: > sessions.id]
+  code text [not null]
+  first_detected_at real [not null]
+  original_deadline_at real
+  indexes {
+    (session_id, code) [pk]
+  }
+  Note: 'Sticky issue history; actual FK cascades only within this new owned store.'
+}
+
+Table images {
+  id text [pk]
+  session_id text [not null, ref: > sessions.id]
+  source_key text
+  extension text [not null, note: 'png/jpg; managed filename is id.extension, not a supplied path']
+  sha256 text [not null]
+  content_type text [not null]
+  byte_size integer [not null]
+  captured_at real [not null]
+  indexes {
+    session_id
+    (session_id, source_key) [unique]
+  }
+  Note: 'Immutable owned copies, not links to legacy visual cleanup. <=64 images/round, <=2MiB/image, <=4M pixels; global reserved media budget512MiB. Never remove source originals.'
+}
+
+Table jobs {
+  event_id text [pk]
+  session_id text [not null, ref: > sessions.id]
+  revision integer [not null]
+  payload blob [not null, note: 'Immutable canonical JSON bytes; no token/local path']
+  created real [not null]
+  expires_at real [not null]
+  destination_key text [note: 'Pinned identity digest, initially NULL; not an application key']
+  status text [not null, note: 'queued/delivered/failed; retry remains queued with retry_at']
+  retry_at real [not null]
+  attempts integer [not null]
+  error_code text [note: 'Whitelisted code only']
+  indexes {
+    (session_id, revision) [unique]
+    (destination_key, status, retry_at, created)
+  }
+}
+
+Table uploads {
+  image_id text [not null, ref: > images.id]
+  destination_key text [not null]
+  indexes {
+    (image_id, destination_key) [pk]
+  }
+  Note: 'Receipt only after exact image-id/hash acknowledgement; not proof metadata was accepted.'
+}
+
+Table file_intents {
+  id text [pk]
+  created real [not null]
+  indexes {
+    created
+  }
+  Note: 'Durable ownership reservation before filesystem copy so crashes cannot strand an untracked app-owned file.'
+}
+
+Table media_gc {
+  id text [not null]
+  extension text [not null]
+  byte_size integer [not null]
+  indexes {
+    (id, extension) [pk]
+  }
+  Note: 'Owned-file deletion retries after expired metadata commits; no event payload here. Report OS deletion failures, never recurse through links or delete unrelated files.'
+}

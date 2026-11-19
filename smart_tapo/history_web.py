@@ -16,14 +16,14 @@ import secrets
 import socket
 import stat
 import threading
+from datetime import datetime
 from html import escape
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-from .history import (EMERGENCY_LABELS, HistoryUnavailable, IMAGE_LABELS, KIND_LABELS,
+from .history import (HistoryUnavailable, HISTORY_TIMEZONE, IMAGE_LABELS, KIND_LABELS,
                       get_event, get_images, list_events)
-from .time_display import thai_time
 
 _TITLE = 'ประวัติการหยอดแบงค์'
 _MAX_IMAGE = 16 * 1024 * 1024
@@ -40,7 +40,12 @@ def _link(path, **query):
 
 
 def _stamp(value):
-    return escape(thai_time(value,iso=True))
+    if value is None:
+        return '—'
+    try:
+        return escape(datetime.fromtimestamp(value, tz=HISTORY_TIMEZONE).isoformat(timespec='seconds'))
+    except (ValueError, OverflowError, OSError, TypeError):
+        return '—'
 
 
 def _document(body, hours):
@@ -49,8 +54,8 @@ def _document(body, hours):
             f'<title>{_TITLE}</title><style>{_STYLE}</style><body><h1>{_TITLE}</h1>'
             '<p class="notice">แสดงการพบวัตถุในช่องรับธนบัตรเท่านั้น '
             'ไม่ใช่การยืนยันการชำระเงินหรือยอดเงิน (occupancy, not payment confirmation)</p>'
-            f'<p>เวลาไทย UTC+7 จากเวลาที่เครื่องรับภาพ ไม่ใช่เวลา OSD กล้อง; '
-            f'เก็บเหตุการณ์ปกติหลังจบ {escape(str(hours))} ชั่วโมง</p>{body}</body></html>').encode('utf-8')
+            '<p>เวลาทั้งหมดเป็นเวลาไทย (UTC+7)</p>'
+            f'<p>เก็บเหตุการณ์ปกติหลังจบ {escape(str(hours))} ชั่วโมง</p>{body}</body></html>').encode('utf-8')
 
 
 class _HTTPServer(ThreadingHTTPServer):
@@ -275,7 +280,7 @@ class _Handler(BaseHTTPRequestHandler):
         for event in page.events:
             label = escape(KIND_LABELS.get(event.kind, str(event.kind)))
             body += (f'<article><a href="{_link("/event", id=event.id)}">{_stamp(event.started)}</a>'
-                     f'<p>{label}</p><p>{escape(EMERGENCY_LABELS.get(event.emergency_state,""))}</p>'
+                     f'<p>{label}</p>'
                      f'<p>ภาพหลักฐาน: {escape(str(event.image_count))}</p></article>')
         if not page.events:
             body += '<p>ยังไม่มีเหตุการณ์</p>'
@@ -287,8 +292,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _detail(self, config, event):
         body = ('<a href="/">กลับรายการ</a><h2>รายละเอียดเหตุการณ์จากภาพ</h2>'
-                f'<p>{escape(KIND_LABELS.get(event.kind, str(event.kind)))}</p>'
-                f'<p>{escape(EMERGENCY_LABELS.get(event.emergency_state,""))}</p><dl>')
+                f'<p>{escape(KIND_LABELS.get(event.kind, str(event.kind)))}</p><dl>')
         for label, value in (('เริ่มพบ', event.started), ('พบล่าสุด', event.last_present),
                              ('เริ่มว่าง', event.first_clear), ('จบเหตุการณ์', event.closed)):
             body += f'<dt>{label}</dt><dd>{_stamp(value)}</dd>'
@@ -322,9 +326,8 @@ class _Handler(BaseHTTPRequestHandler):
             if len(data) > _MAX_IMAGE:
                 raise ValueError()
             with Image.open(io.BytesIO(data)) as png:
-                if (png.format != 'PNG' or png.width > config.expected_size[0]
-                        or png.height > config.expected_size[1]):
-                    raise ValueError()
+                from .history_image import validate_history_png
+                validate_history_png(png)
                 png.verify()
             with Image.open(io.BytesIO(data)) as png:
                 png.load()
