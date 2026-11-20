@@ -25,7 +25,7 @@ import warnings
 from PIL import Image
 
 from .refueling import ConfirmedAnnouncement, RefuelingDecision, RefuelingEngine, SessionUpdate
-from .refueling_contract import ERROR_CODES,validate_event
+from .refueling_contract import ERROR_CODES,validate_event,validate_observation
 from .storage_diagnostics import StorageCameraMismatchError, StoragePathUnsafeError, StorageMetadataBusyError, StorageSchemaError, guard_evidence
 
 TTL_SECONDS = 72 * 60 * 60
@@ -137,6 +137,12 @@ class RefuelingStore:
                     revision INTEGER NOT NULL,payload BLOB NOT NULL,created REAL NOT NULL,expires_at REAL NOT NULL,
                     destination_key TEXT,status TEXT NOT NULL DEFAULT 'queued',retry_at REAL NOT NULL DEFAULT 0,
                     attempts INTEGER NOT NULL DEFAULT 0,error_code TEXT,UNIQUE(session_id,revision));
+                CREATE TABLE IF NOT EXISTS observation_jobs(event_id TEXT PRIMARY KEY,
+                    source_key TEXT NOT NULL UNIQUE REFERENCES observations(source_key) ON DELETE CASCADE,
+                    payload BLOB NOT NULL,created REAL NOT NULL,expires_at REAL NOT NULL,
+                    destination_key TEXT,status TEXT NOT NULL DEFAULT 'queued',retry_at REAL NOT NULL DEFAULT 0,
+                    attempts INTEGER NOT NULL DEFAULT 0,error_code TEXT);
+                CREATE INDEX IF NOT EXISTS observation_jobs_due ON observation_jobs(destination_key,status,retry_at,created);
                 CREATE TABLE IF NOT EXISTS media_gc(id TEXT NOT NULL,extension TEXT NOT NULL,byte_size INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(id,extension));
                 CREATE TABLE IF NOT EXISTS file_intents(id TEXT PRIMARY KEY,created REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS uploads(image_id TEXT NOT NULL REFERENCES images(id) ON DELETE CASCADE,
@@ -177,6 +183,7 @@ class RefuelingStore:
             'issues': 'session_id code first_detected_at original_deadline_at',
             'images': 'id session_id source_key extension sha256 content_type byte_size captured_at',
             'jobs': 'event_id session_id revision payload created expires_at destination_key status retry_at attempts error_code',
+            'observation_jobs': 'event_id source_key payload created expires_at destination_key status retry_at attempts error_code',
             'media_gc': 'id extension byte_size',
             'file_intents': 'id created',
             'uploads': 'image_id destination_key',
@@ -191,6 +198,29 @@ class RefuelingStore:
             actual = [row[1] for row in self._db.execute(f'PRAGMA table_info({table})')]
             if actual != columns.split():
                 raise StorageSchemaError('Unsupported store schema')
+
+        # The new additive outbox must retain its cascade/uniqueness contract.
+        if 'observation_jobs' in objects:
+            info=list(self._db.execute('PRAGMA table_info(observation_jobs)'))
+            shape=[(r[2],r[3],r[4],r[5]) for r in info]
+            if shape!=[('TEXT',0,None,1),('TEXT',1,None,0),('BLOB',1,None,0),
+                       ('REAL',1,None,0),('REAL',1,None,0),('TEXT',0,None,0),
+                       ('TEXT',1,"'queued'",0),('REAL',1,'0',0),('INTEGER',1,'0',0),('TEXT',0,None,0)]:
+                raise StorageSchemaError('Unsupported observation outbox schema')
+            foreign=list(self._db.execute('PRAGMA foreign_key_list(observation_jobs)'))
+            if len(foreign)!=1 or tuple(foreign[0])[2:7]!=('observations','source_key','source_key','NO ACTION','CASCADE'):
+                raise StorageSchemaError('Unsupported observation outbox schema')
+            unique=[tuple(r[2] for r in self._db.execute('SELECT * FROM pragma_index_info(?)',(index[1],)))
+                    for index in self._db.execute('PRAGMA index_list(observation_jobs)') if index[2]]
+            if sorted(unique)!=[('event_id',),('source_key',)]:
+                raise StorageSchemaError('Unsupported observation outbox schema')
+        if 'observation_jobs_due' in objects:
+            columns=tuple(r[2] for r in self._db.execute('PRAGMA index_info(observation_jobs_due)'))
+            owner=self._db.execute("SELECT tbl_name FROM sqlite_master WHERE name='observation_jobs_due'").fetchone()[0]
+            options=self._db.execute("SELECT \"unique\",partial FROM pragma_index_list('observation_jobs') WHERE name='observation_jobs_due'").fetchone()
+            if (objects['observation_jobs_due']!='index' or owner!='observation_jobs'
+                    or columns!=('destination_key','status','retry_at','created') or options is None or tuple(options)!=(0,0)):
+                raise StorageSchemaError('Unsupported observation outbox index')
 
     def _guard(self):
         for component, path in (('directory', self.directory), ('media', self.media),
@@ -314,6 +344,29 @@ class RefuelingStore:
             if announcement.kind=='paid_ready' else None)
         return result.updates[-1].session.id
 
+    def _partial_duplicate_reason(self,announcement,engine):
+        """Apply acoustic deduplication without inventing a canonical open round.
+
+        Ready-only partials cannot be put in the canonical engine checkpoint:
+        its invariant requires every last Ready to have a real open session.
+        Read their already persisted observations instead, inside the same lock.
+        """
+        snapshot=engine.checkpoint()
+        previous=self._db.execute("""SELECT started_at,ended_at FROM observations
+            WHERE reason IN ('awaiting_end_after_source_gap','expired_round_awaiting_completion')
+            ORDER BY started_at DESC LIMIT 1""").fetchone()
+        previous=dict(previous) if previous else snapshot['last_utterance']
+        if (announcement.started_at<snapshot['processed_until'] or
+                (previous and announcement.ended_at<=previous['ended_at'])):
+            return 'duplicate_or_stale_observation'
+        if previous:
+            overlap=max(0,min(announcement.ended_at,previous['ended_at'])-
+                        max(announcement.started_at,previous['started_at']))
+            shorter=min(announcement.ended_at-announcement.started_at,
+                        previous['ended_at']-previous['started_at'])
+            if overlap/shorter>=.5:return 'overlapping_observation'
+        return None
+
     def accept(self, source_key, announcement):
         _key(source_key)
         now = _timestamp(self.clock())
@@ -327,12 +380,12 @@ class RefuelingStore:
             gap=self._meta('awaiting_end_after_gap') is True
             awaiting=gap or self._meta('awaiting_end_after_expiry') is True
             if awaiting and engine.current is not None:raise ValueError('Invalid expired-round checkpoint')
-            if awaiting and announcement.kind=='paid_ready':
-                if announcement.started_at<engine.checkpoint()['processed_until']:
-                    decision=RefuelingDecision(ignored_reason='duplicate_or_stale_observation')
-                else:
-                    engine.tick(announcement.started_at)
-                    decision=RefuelingDecision(ignored_reason='awaiting_end_after_source_gap' if gap else 'expired_round_awaiting_completion')
+            duplicate=self._partial_duplicate_reason(announcement,engine) if awaiting else None
+            if duplicate:
+                decision=RefuelingDecision(ignored_reason=duplicate)
+            elif awaiting and announcement.kind=='paid_ready':
+                engine.tick(announcement.started_at)
+                decision=RefuelingDecision(ignored_reason='awaiting_end_after_source_gap' if gap else 'expired_round_awaiting_completion')
             else:
                 decision = engine.accept(announcement)
                 if awaiting and decision.ignored_reason=='completion_without_start':
@@ -347,6 +400,20 @@ class RefuelingStore:
             group=self._partial_audio_group(announcement,gap,decision)
             if group is not None:
                 self._db.execute('INSERT INTO partial_audio_members VALUES (?,?,?)',(source_key,group,now))
+            if decision.ignored_reason in ('completion_without_start','awaiting_end_after_source_gap','expired_round_awaiting_completion'):
+                identifier=uuid.uuid4().hex
+                payload={'schema_version':1,'event_id':identifier+':1','event_type':'refueling.observation',
+                         'occurred_at':_iso(announcement.started_at),
+                         'observation':{'id':identifier,'camera_id':self.camera_id,'kind':announcement.kind,
+                             'reason':decision.ignored_reason,'observed_started_at':_iso(announcement.started_at),
+                             'observed_ended_at':_iso(announcement.ended_at),'audio_group_id':group,
+                             'amount_baht':None,'evidence':[]}}
+                body=_json(payload).encode('utf-8')
+                validate_observation(body,self.camera_id,identifier+':1')
+                if self._job_table(identifier+':1') is not None:
+                    raise StorageSchemaError('Duplicate outbox identity')
+                self._db.execute('INSERT INTO observation_jobs(event_id,source_key,payload,created,expires_at) VALUES (?,?,?,?,?)',
+                                 (identifier+':1',source_key,body,now,now+TTL_SECONDS))
             self._save_engine(engine)
             return decision
 
@@ -569,10 +636,23 @@ class RefuelingStore:
         result = []
         with self._transaction():
             self._db.execute("UPDATE jobs SET destination_key=? WHERE destination_key IS NULL AND status='queued' AND expires_at>?", (destination_key, now))
-            rows = self._db.execute("SELECT * FROM jobs WHERE destination_key=? AND status='queued' AND retry_at<=? AND expires_at>? ORDER BY retry_at,created,rowid LIMIT ?",
-                                    (destination_key, now, now, max(0, min(int(limit), 100)))).fetchall()
-            for row in rows:
+            self._db.execute("UPDATE observation_jobs SET destination_key=? WHERE destination_key IS NULL AND status='queued' AND expires_at>?", (destination_key, now))
+            # Merge bounded heads rather than starving one outbox behind the other.
+            bound=max(0,min(int(limit),100))
+            rows=[]
+            for table in ('jobs','observation_jobs'):
+                rows.extend((table,row) for row in self._db.execute(
+                    f"SELECT rowid AS queue_order,* FROM {table} WHERE destination_key=? AND status='queued' AND retry_at<=? AND expires_at>? ORDER BY retry_at,created,rowid LIMIT ?",
+                    (destination_key,now,now,bound)).fetchall())
+            rows.sort(key=lambda item:(item[1]['retry_at'],item[1]['created'],item[1]['queue_order'],item[0]))
+            for table,row in rows[:bound]:
+                self._job_table(row['event_id'])  # Refuse ambiguous identities before dispatch.
                 payload = bytes(row['payload'])
+                if table=='observation_jobs':
+                    job={key:row[key] for key in ('event_id','attempts','expires_at','destination_key')}
+                    job.update(payload=payload,images=[],metadata={},kind='observation')
+                    result.append(job)
+                    continue
                 manifest = json.loads(payload)['session']['evidence']
                 images = []
                 try:
@@ -604,17 +684,18 @@ class RefuelingStore:
         _key(destination_key)
         with self._transaction():
             now = _timestamp(self.clock())
-            rows = self._db.execute("SELECT event_id FROM jobs WHERE status IN ('queued','failed') AND expires_at>? ORDER BY event_id", (now,)).fetchall()
+            rows = self._db.execute("SELECT event_id FROM jobs WHERE status IN ('queued','failed') AND expires_at>? UNION ALL SELECT event_id FROM observation_jobs WHERE status IN ('queued','failed') AND expires_at>? ORDER BY event_id", (now,now)).fetchall()
             identifiers = tuple(row[0] for row in rows)
             if not consent:
                 return identifiers
             if expected_ids is None or tuple(expected_ids) != identifiers:
                 raise ValueError('Queue changed; confirm again')
+            tables={identifier:self._job_table(identifier) for identifier in identifiers}
             for identifier in identifiers:
                 # Receipts must not leak across destinations; even same-target recovery
                 # revalidates media rather than relying on an ambiguous previous attempt.
                 self._db.execute('DELETE FROM uploads WHERE image_id IN (SELECT i.id FROM images i JOIN jobs j ON i.session_id=j.session_id WHERE j.event_id=?) AND destination_key=?', (identifier, destination_key))
-                self._db.execute("UPDATE jobs SET destination_key=?,status='queued',retry_at=0,error_code=NULL WHERE event_id=?", (destination_key, identifier))
+                self._db.execute(f"UPDATE {tables[identifier]} SET destination_key=?,status='queued',retry_at=0,error_code=NULL WHERE event_id=?", (destination_key, identifier))
             return len(identifiers)
 
     def mark_image_uploaded(self, image_id, destination_key):
@@ -635,6 +716,13 @@ class RefuelingStore:
         with self._transaction():
             self._db.execute('DELETE FROM uploads WHERE destination_key=?', (destination_key,))
 
+    def _job_table(self,event_id):
+        """Identity lookup must never update two tables or choose an arbitrary one."""
+        tables=[table for table in ('jobs','observation_jobs') if self._db.execute(
+            f'SELECT 1 FROM {table} WHERE event_id=?',(event_id,)).fetchone()]
+        if len(tables)>1:raise StorageSchemaError('Ambiguous outbox identity')
+        return tables[0] if tables else None
+
     def mark_delivery(self, event_id, status, *, retry_at=None, error_code=None):
         if status not in ('delivered', 'retry', 'failed'):
             raise ValueError('Invalid delivery status')
@@ -645,7 +733,9 @@ class RefuelingStore:
             error_code = 'delivery_error'
         retry_at = _timestamp(retry_at) if retry_at is not None else _timestamp(self.clock())
         with self._transaction():
-            self._db.execute("UPDATE jobs SET status=?,retry_at=?,attempts=attempts+1,error_code=? WHERE event_id=? AND status='queued' AND destination_key IS NOT NULL AND expires_at>?",
+            table=self._job_table(event_id)
+            if table is None:return
+            self._db.execute(f"UPDATE {table} SET status=?,retry_at=?,attempts=attempts+1,error_code=? WHERE event_id=? AND status='queued' AND destination_key IS NOT NULL AND expires_at>?",
                              ('queued' if status == 'retry' else status, retry_at, error_code, event_id, self.clock()))
 
     def delivery_counts(self):
@@ -654,10 +744,10 @@ class RefuelingStore:
                   'last_cleanup_at': self._meta('last_cleanup_at'),
                   'awaiting_end_after_expiry':self._meta('awaiting_end_after_expiry') is True,
                   'awaiting_end_after_gap':self._meta('awaiting_end_after_gap') is True}
-        for row in self._db.execute('SELECT status,count(*) FROM jobs GROUP BY status'):
+        for row in self._db.execute('SELECT status,count(*) FROM (SELECT status FROM jobs UNION ALL SELECT status FROM observation_jobs) GROUP BY status'):
             result[row[0]] = row[1]
         result['failed_reasons'] = dict(self._db.execute(
-            "SELECT coalesce(error_code,'unknown'),count(*) FROM jobs WHERE status='failed' GROUP BY 1 ORDER BY 2 DESC"))
+            "SELECT coalesce(error_code,'unknown'),count(*) FROM (SELECT status,error_code FROM jobs UNION ALL SELECT status,error_code FROM observation_jobs) WHERE status='failed' GROUP BY 1 ORDER BY 2 DESC"))
         return result
 
     def cleanup(self, now=None):
@@ -665,6 +755,8 @@ class RefuelingStore:
         deleted = failed = expired = sessions = 0
         with self._transaction():
             engine = self._engine()
+            expired += self._db.execute("SELECT count(*) FROM observation_jobs WHERE expires_at<=? AND status!='delivered'",(now,)).fetchone()[0]
+            self._db.execute('DELETE FROM observation_jobs WHERE expires_at<=?',(now,))
             rows = self._db.execute('SELECT id FROM sessions WHERE created<=?', (now-TTL_SECONDS,)).fetchall()
             for row in rows:
                 identifier = row[0]

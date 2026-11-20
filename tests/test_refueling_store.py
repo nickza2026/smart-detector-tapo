@@ -264,7 +264,10 @@ class RefuelingStoreTests(unittest.TestCase):
         result = self.store.accept('orphan', ConfirmedAnnouncement('end', 100, 102))
         self.assertEqual(result.ignored_reason, 'completion_without_start')
         self.assertEqual(self.store.list_sessions(), [])
-        self.assertEqual(self.store.pending_jobs('dest'), [])
+        jobs=self.store.pending_jobs('dest')
+        self.assertEqual(len(jobs),1)
+        self.assertEqual(jobs[0]['kind'],'observation')
+        self.assertEqual(self.store._db.execute('SELECT count(*) FROM jobs').fetchone()[0],0)
         for key in ('../bad', 'x' * 129, 'ไทย', 'bad\n'):
             with self.assertRaises(ValueError):
                 self.ready(key)

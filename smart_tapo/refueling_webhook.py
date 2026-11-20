@@ -12,7 +12,7 @@ import time
 from urllib import error,parse,request
 from .diagnostics import APP_VERSION
 from .refueling_api_log import MAX_EXCERPT,excerpt
-from .refueling_contract import MAX_IMAGE,MAX_JSON,validate_event
+from .refueling_contract import MAX_IMAGE,MAX_JSON,validate_event,validate_observation
 
 
 
@@ -192,6 +192,13 @@ class RefuelingWebhookClient:
             return _local(self,DeliveryResult('failed','invalid_payload'),event_id)
         return self._send('POST','events',payload,'application/json',event_id)
 
+    def send_observation(self,payload,event_id):
+        try:
+            validate_observation(payload,self.target.camera_id,event_id)
+        except (KeyError,ValueError,TypeError,UnicodeError,RecursionError):
+            return _local(self,DeliveryResult('failed','invalid_payload'),event_id)
+        return self._send('POST','observations',payload,'application/json',event_id)
+
 
 def _local(client,result,key):
     """A failure decided before any request is still an attempt the operator must see."""
@@ -208,8 +215,10 @@ def dispatch_one(store,client,*,clock=time.time):
     if not jobs:return None
     job=jobs[0]
     try:
-        value=validate_event(job['payload'],client.target.camera_id,job['event_id'])
-        manifest={image['id']:image['sha256'] for image in value['session']['evidence']}
+        observation=job.get('kind')=='observation'
+        validate=validate_observation if observation else validate_event
+        value=validate(job['payload'],client.target.camera_id,job['event_id'])
+        manifest={image['id']:image['sha256'] for image in value['observation' if observation else 'session']['evidence']}
         actual={image['id']:image['sha256'] for image in job['images']}
         if manifest!=actual or len(actual)!=len(job['images']):raise ValueError
     except (ValueError,TypeError,KeyError,UnicodeError,RecursionError):
@@ -233,7 +242,8 @@ def dispatch_one(store,client,*,clock=time.time):
         if clock()>=job['expires_at']:
             store.cleanup(now=clock())
             return _local(client,expired,job['event_id'])
-        result=client.send_event(job['payload'],job['event_id'])
+        send=client.send_observation if observation else client.send_event
+        result=send(job['payload'],job['event_id'])
     if result.invalidate_images:
         if job['attempts']>=2:result=DeliveryResult('failed','receiver_media_contract_mismatch')
         else:store.forget_image_uploads(destination)

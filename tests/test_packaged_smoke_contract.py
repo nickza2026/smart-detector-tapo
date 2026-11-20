@@ -25,6 +25,7 @@ def synthetic_report():
         notify_test_fake_only=True, real_notifications=0,
         notify_history_gui=True, notify_history_both_outcomes=True,
         notify_history_redacted=True, notify_history_fake_only=True,
+        webhook_observation_delivery_completed=True,
         real_windows_audio=False, real_adb=False, real_user_stream=False,
         external_delivery=False, webhook_real_http=False,
     )
@@ -38,6 +39,12 @@ class PackagedSmokeContractTests(unittest.TestCase):
         report = synthetic_report()
         del report['windows_dpapi_roundtrip']
         with self.assertRaisesRegex(RuntimeError, 'windows_dpapi_roundtrip'):
+            smoke_packaged.validate_smoke_report(report)
+
+    def test_missing_observation_ack_cannot_pass_frozen_smoke(self):
+        report = synthetic_report()
+        del report['webhook_observation_delivery_completed']
+        with self.assertRaisesRegex(RuntimeError, 'webhook_observation_delivery_completed'):
             smoke_packaged.validate_smoke_report(report)
 
     def test_other_credential_or_delivery_evidence_cannot_replace_roundtrip(self):

@@ -1,5 +1,6 @@
 """Strict outbound v1 metadata: no arbitrary attributes or local file paths."""
-from datetime import datetime
+from datetime import datetime, timezone
+from fractions import Fraction
 import json
 import re
 
@@ -77,4 +78,49 @@ def validate_event(payload,camera_id=None,event_id=None):
         if (image['id'] in ids or image['content_type'] not in ('image/png','image/jpeg')
                 or type(image['byte_size']) is not int or not 0<image['byte_size']<=MAX_IMAGE):raise ValueError('invalid_payload')
         _date(image['captured_at']);ids.add(image['id'])
+    return value
+
+
+def validate_observation(payload,camera_id=None,event_id=None):
+    """Validate the separate immutable audio-evidence contract; not a session."""
+    def unique(pairs):
+        result={}
+        for key,value in pairs:
+            if key in result:raise ValueError('invalid_payload')
+            result[key]=value
+        return result
+    if not isinstance(payload,bytes) or not 0<len(payload)<=MAX_JSON:raise ValueError('invalid_payload')
+    value=json.loads(payload.decode('utf-8'),object_pairs_hook=unique,
+                     parse_constant=lambda _:(_ for _ in ()).throw(ValueError('invalid_payload')))
+    _keys(value,'schema_version event_id event_type occurred_at observation')
+    if type(value['schema_version']) is not int or value['schema_version']!=1 or value['event_type']!='refueling.observation':
+        raise ValueError('invalid_payload')
+    s=value['observation']
+    _keys(s,'id camera_id kind reason observed_started_at observed_ended_at audio_group_id amount_baht evidence')
+    _match(s['id'],'[0-9a-f]{32}')
+    if int(s['id'],16)==0:raise ValueError('invalid_payload')
+    _match(s['camera_id'],'[A-Za-z0-9_-]{1,64}')
+    if camera_id is not None and s['camera_id']!=camera_id:raise ValueError('invalid_payload')
+    if value['event_id']!=s['id']+':1' or (event_id is not None and value['event_id']!=event_id):raise ValueError('invalid_payload')
+    reasons={'end':('completion_without_start',),
+             'paid_ready':('awaiting_end_after_source_gap','expired_round_awaiting_completion')}
+    if s['kind'] not in reasons or s['reason'] not in reasons[s['kind']]:raise ValueError('invalid_payload')
+    if s['audio_group_id'] is not None:_match(s['audio_group_id'],'[A-Za-z0-9_.:-]{1,128}')
+    if s['amount_baht'] is not None or s['evidence']!=[]:raise ValueError('invalid_payload')
+    def instant(text):
+        if not isinstance(text,str) or len(text)>40:raise ValueError('invalid_payload')
+        parts=re.fullmatch(r'([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})'
+                          r'(?:\.([0-9]+))?(Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])',text)
+        if parts is None:raise ValueError('invalid_payload')
+        whole,fraction,zone=parts.groups()
+        date=datetime.fromisoformat(whole+zone.replace('Z','+00:00'))
+        delta=date-datetime(1970,1,1,tzinfo=timezone.utc)
+        digits=fraction or ''
+        # Never use timestamp floats or datetime's truncated microseconds for
+        # evidence ordering/equality. The original fractional digits are exact.
+        result=Fraction(delta.days*86400+delta.seconds)+Fraction(int(digits or '0'),10**len(digits))
+        if result<=0:raise ValueError('invalid_payload')
+        return result
+    start=instant(s['observed_started_at'])
+    if instant(s['observed_ended_at'])<start or instant(value['occurred_at'])!=start:raise ValueError('invalid_payload')
     return value

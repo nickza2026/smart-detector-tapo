@@ -21,7 +21,7 @@ class PartialHistoryTests(unittest.TestCase):
     def accept(self, key, kind, offset):
         return self.store.accept(key, ConfirmedAnnouncement(kind, self.now + offset, self.now + offset + 2))
 
-    def test_orphan_end_reaches_actual_history_reader_without_session_or_job(self):
+    def test_orphan_end_reaches_actual_history_reader_without_session_or_canonical_job(self):
         self.accept('PRIVATE-provider-key', 'end', -20)
         self.assertEqual(self.store.list_sessions(), [])
         self.assertEqual(self.store._db.execute('SELECT count(*) FROM observations').fetchone()[0], 1)

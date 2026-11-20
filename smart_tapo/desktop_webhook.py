@@ -87,6 +87,8 @@ def _attempt(directory, target, stop, client_factory, log=None):
                 return DeliveryResult('retry', 'transport_unconfirmed') if stop.is_set() else remember(client.upload_image(image))
             def send_event(self, payload, event_id):
                 return DeliveryResult('retry', 'transport_unconfirmed') if stop.is_set() else remember(client.send_event(payload, event_id))
+            def send_observation(self, payload, event_id):
+                return DeliveryResult('retry', 'transport_unconfirmed') if stop.is_set() else remember(client.send_observation(payload, event_id))
         return dispatch_one(_QueueBoundary(store), Cancellable())
     except BaseException as exc:
         failed = True

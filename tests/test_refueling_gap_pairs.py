@@ -22,7 +22,7 @@ class GapPairTests(unittest.TestCase):
     def pairs(self,limit=200):
         return [r for r in self.store.list_history(limit) if r['row_type']=='observation_pair']
 
-    def test_thirteen_seconds_form_one_partial_pair_without_closing_old_round_or_api(self):
+    def test_thirteen_seconds_form_one_partial_pair_without_closing_old_round_or_canonical_jobs(self):
         self.event('PRIVATE-ready-key','paid_ready',300)
         self.event('PRIVATE-end-key','end',313)
         rows=self.store.list_history()

@@ -1,6 +1,16 @@
 # SmartTapo — Windows / RTSP
 
-Latest candidate: **.39** — final clean-source846executed,845pass/1platformskip; the SAME EXE passed65cold semantic flags twice, including both supplied private MP4s through compiled matching and isolated SQLite. Explicitly selected new prepared profile adds temporal-order evidence; legacy profiles are unchanged. Real-clips/gain10/10 and three real negatives passed, but generated extra-interference completion is9/12, NOT universal low-volume/noise reliability. ZIP `.tools/SmartTapo-v39-rtsp-audio-candidate.zip`; EXE `.tools/diagnostic-v39/SmartTapo.exe`; [คู่มือ .39](docs/ram-storage-v39-th.md). **Click “ใช้โปรไฟล์จากเสียงที่เตรียมให้” while stopped to use the new kit; opening the EXE alone retains the old selected profile.** No new native RTSP/VPS/provider/user-config/history operation or production acceptance. See VERIFICATION.md for exact evidence and synthetic-tail limits.
+## Source V59
+
+V59 ส่ง End-only และประกาศเสียงข้อมูลไม่ครบเป็น observation แยกจากรอบเติม โดยใช้เวลาประกาศจริง ไม่สร้างเวลาเริ่มรอบ จำนวนครั้งเติม ยอดเงิน หรือรูปขึ้นเอง การส่งใช้ ID และ payload เดิมข้ามการ retry/restart และไม่ส่งประวัติเก่าก่อนอัปเดตย้อนหลังอัตโนมัติ
+
+ฝั่งรับต้องรองรับ `/api/v1/refueling/observations` ก่อนเปิดใช้ client รุ่นนี้กับการส่งข้อมูลไม่ครบ ดู [สัญญา API](docs/refueling-observations-api-th.md) การรับภาพและเสียงปกติใช้ RTSP; MEmu/ADB ด้านล่างเป็นข้อมูลเส้นทางเดิม ไม่ใช่ขั้นตอน RTSP ปัจจุบัน
+
+ผลทดสอบ local ของ source V59: 1,373 เคส รันผ่าน 1,372 และข้ามตามเงื่อนไขแพลตฟอร์ม 1 เคส การสร้าง release ใช้ artifact ของ CI commit ที่ตรงกันและ signed update manifest ตาม [คู่มือ build/release](docs/build-and-release-th.md) ผล local/CI ไม่ใช่การยืนยันตู้หรือ provider จริง
+
+## บันทึก candidate ย้อนหลัง
+
+Historical candidate: **.39** — final clean-source846executed,845pass/1platformskip; the SAME EXE passed65cold semantic flags twice, including both supplied private MP4s through compiled matching and isolated SQLite. Explicitly selected new prepared profile adds temporal-order evidence; legacy profiles are unchanged. Real-clips/gain10/10 and three real negatives passed, but generated extra-interference completion is9/12, NOT universal low-volume/noise reliability. ZIP `.tools/SmartTapo-v39-rtsp-audio-candidate.zip`; EXE `.tools/diagnostic-v39/SmartTapo.exe`; [คู่มือ .39](docs/ram-storage-v39-th.md). **Click “ใช้โปรไฟล์จากเสียงที่เตรียมให้” while stopped to use the new kit; opening the EXE alone retains the old selected profile.** No new native RTSP/VPS/provider/user-config/history operation or production acceptance. See VERIFICATION.md for exact evidence and synthetic-tail limits.
 
 ### Historical .38 checkpoint (superseded by .39)
 
@@ -14,11 +24,15 @@ Previous **.33** fixes advancingPTS falsely rejected when multiple frames share 
 
 Latest candidate **.32** fixes old720×1280 markers repeatedly resetting1920×1080 ROI proof. Full/clean752passed1skip; cold44flags includes10frames/9s with4oldmarkers retained. Generic object occupancy, not a bank classifier; no need to wait for a real jam to start. Guide `docs/worker-roi-v32-th.md`; EXE `.tools/diagnostic-v32/SmartTapo.exe`. Actual C500/provider acceptance remains unverified.
 
+## ภาพรวม
+
 โปรแกรมหน้าต่างสำหรับตรวจภาพวัตถุค้างบริเวณช่องรับ และบันทึกประกาศเสียงจาก Tapo ใช้ **Capture / Worker / ตัวฟังเสียงแยก process** และเก็บข้อมูลในเครื่อง ไม่ต้องติดตั้ง PostgreSQL
 
 **สถานะ:** ยังต้องยืนยันกับกล้อง/เสียง/VPS จริง ผลทดสอบจำลองและ build ผ่านไม่ใช่การรับรองความแม่นยำธนบัตรหรือเฝ้าได้ทุกสภาพ ห้ามเริ่มด้วยการเปิดส่งแจ้งเตือนจริง
 
-## เริ่มใช้งาน
+## ขั้นตอน MEmu/ADB ของเส้นทางเดิม
+
+สำหรับเส้นทาง RTSP ดู [คู่มือภาพและเสียง RTSP](docs/rtsp-audio-v31-th.md) ขั้นตอนต่อไปนี้เก็บไว้เป็นข้อมูลย้อนหลังของเส้นทาง MEmu/ADB
 
 1. เปิด MEmu/Tapo ที่หน้า **Live ของกล้องที่เลือก** ล็อกอินให้เรียบร้อย ไม่ใช่ Playback
 2. เปิด SmartTapo ตั้ง `adb.exe`, ADB Serial และชื่อกล้องให้ตรง แล้วบันทึก ใช้ปุ่ม **ดูภาพอุปกรณ์ ADB (ไม่บันทึก)** ตรวจว่าภาพตรงกับ MEmu ที่ดูอยู่
@@ -85,6 +99,7 @@ Webhook, การผูกรูปเข้ารอบเสียง แล�
 - [ผลตรวจและข้อเสนอแนะ](docs/recommendations-th.md) — แยกหลักฐานออกจากสมมติฐาน
 - [สถานะการทำตามคำแนะนำ](docs/recommendations-progress-th.md)
 - [หลักฐานการตรวจแต่ละรุ่น](VERIFICATION.md)
+- [Refueling API: หลักฐานเสียงข้อมูลไม่ครบ](docs/refueling-observations-api-th.md) — observation แยกจากรอบเติมและยอดเงิน
 - [คู่มืออัปเดต .13](docs/refueling-parallel-v13-th.md) — ประวัติฐานก่อนแก้ contention
 - [เอกสาร CLI/รายละเอียดรุ่นก่อน](README-legacy-th.md)
 - Candidate .31 ใช้RTSPทั้งภาพและเสียง เอาMEmu/ADB/Windowsloopbackออกจากเส้นทางปกติ พร้อมstartupv2และretryแหล่งเดิมหลังdecoderค้าง มีPyAV/FFmpegbundled ไม่ใช้FFmpeg/PATHระบบ ดู `docs/rtsp-audio-v31-th.md` Full/clean744เคส743ผ่าน1ข้าม และcoldEXE42flagsผ่านบนownedA/Vloopback ไม่ใช่C500/production; artifact30ยังเป็นเสียงWindowsเดิม
