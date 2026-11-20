@@ -8,6 +8,7 @@ import os
 import sqlite3
 import subprocess
 import tempfile
+import time
 from contextlib import closing
 from pathlib import Path
 
@@ -22,7 +23,7 @@ def run(command):
     # Even a developer machine with credentials configured cannot send through
     # this smoke test: remove credentials AND force shadow mode below.
     environment = {key: value for key, value in os.environ.items()
-                   if key not in ('PUSHOVER_TOKEN', 'PUSHOVER_USER')}
+                   if key not in ('NOTIFY_API_KEY', 'PUSHOVER_TOKEN', 'PUSHOVER_USER')}
     result = subprocess.run(command, env=environment, capture_output=True,
                             text=True, timeout=90, check=False)
     if result.returncode:
@@ -37,12 +38,21 @@ def smoke(capture_command, worker_command):
         config_path = root / 'config.json'
         config_path.write_text(json.dumps({
             'notify_enabled': False,
+            'capture_backend':'rtsp',
+            'rtsp_url':'rtsp://127.0.0.1:1/synthetic-no-connect',
             'alignment_enabled': True,
             'stuck_consecutive_frames': 1,
             # Allow for cold one-file extraction, without changing production config.
             'max_live_age_seconds': 120,
+            'rtsp_max_receive_age_seconds':30,
         }), encoding='utf-8')
         config = load_config(config_path)
+        from dataclasses import replace
+        from smart_tapo.capture.rtsp import rtsp_source_fingerprint,sign_rtsp_proof
+        config=replace(config,rtsp_source_binding=rtsp_source_fingerprint(config))
+        settings=json.loads(config_path.read_text(encoding='utf-8'))
+        settings['rtsp_source_binding']=config.rtsp_source_binding
+        config_path.write_text(json.dumps(settings),encoding='utf-8')
         reference = textured_reference(config)
         source = root / 'empty-source.png'
         reference.save(source)
@@ -57,7 +67,12 @@ def smoke(capture_command, worker_command):
         occupied.paste(video, (config.video.x, config.video.y))
         encoded = io.BytesIO()
         occupied.save(encoded, format='PNG')
-        publish_frame(config, encoded.getvalue(), 'package-smoke', 1, True)
+        # Explicit synthetic provenance, not a claim of actual RTSP transport.
+        # The separate wire/desktop smoke exercises owned loopback RTSP decoding.
+        received,wall=time.monotonic(),time.time()
+        proof=sign_rtsp_proof(config,encoded.getvalue(),'package-smoke',1,received,wall,1.)
+        publish_frame(config, encoded.getvalue(), 'package-smoke', 1, True,
+                      captured_at=wall,captured_monotonic=received,source_proof=proof)
         run([*worker_command, '--config', str(config_path), '--once'])
         with closing(sqlite3.connect(str(config.data_dir / 'worker.sqlite3'))) as database:
             events = database.execute("SELECT count(*) FROM events WHERE kind='stuck'").fetchone()[0]
@@ -71,6 +86,34 @@ def smoke(capture_command, worker_command):
                 if image.size != (width, height):
                     raise RuntimeError('Packaged evidence has the wrong ROI dimensions')
     return {'stuck_events': events, 'shadow_notifications': len(statuses), 'real_notifications': 0}
+
+
+def validate_smoke_report(data):
+    """Require explicit GUI evidence, including the production Notify DPAPI path.
+
+    The Windows GUI saves and reloads a synthetic Notify key in its temporary
+    DesktopStore before emitting windows_dpapi_roundtrip. Fake delivery or the
+    webhook's separate scoped credential check is not a substitute for it.
+    """
+    if not isinstance(data, dict):
+        raise RuntimeError('Packaged GUI smoke report must be an object')
+    for key in ('gui_created', 'auto_config_created', 'worker_stopped',
+                'shadow_notification', 'calibration_ready', 'windows_dpapi_roundtrip',
+                'rtsp_three_distinct_pids', 'history_menu_created', 'history_event_visible',
+                'history_full_image', 'history_web_served',
+                'rtsp_audio_backend', 'rtsp_pcm_real_decoder', 'rtsp_audio_started_first',
+                'rtsp_audio_stopped_reaped', 'notify_test_fake_only',
+                'notify_history_gui', 'notify_history_both_outcomes',
+                'notify_history_redacted', 'notify_history_fake_only',
+                'webhook_observation_delivery_completed'):
+        if data.get(key) is not True:
+            raise RuntimeError('Packaged GUI did not verify: ' + key)
+    if type(data.get('real_notifications')) is not int or data['real_notifications'] != 0:
+        raise RuntimeError('GUI smoke must not use live notifications')
+    for key in ('real_windows_audio', 'real_adb', 'real_user_stream',
+                'external_delivery', 'webhook_real_http'):
+        if data.get(key) is not False:
+            raise RuntimeError('GUI smoke must not touch real endpoints: ' + key)
 
 
 def main():
@@ -88,16 +131,12 @@ def main():
         result = subprocess.run([str(executable), '--smoke-report', str(report)],
                                 capture_output=True, text=True, timeout=150, check=False)
         if result.returncode or not report.is_file():
-            raise RuntimeError('Packaged GUI failed or did not produce its smoke report')
+            # The frozen app writes only a redacted error type/location on failure.
+            detail = report.read_text(encoding='utf-8')[:2000] if report.is_file() else 'no report'
+            raise RuntimeError('Packaged GUI failed or did not produce its smoke report: exit '
+                               + str(result.returncode) + '; ' + detail)
         data = json.loads(report.read_text(encoding='utf-8'))
-        for key in ('gui_created', 'auto_config_created', 'worker_stopped',
-                    'shadow_notification', 'calibration_ready', 'windows_dpapi_roundtrip',
-                    'capture_process_started','history_menu_created','history_event_visible',
-                    'history_full_image','history_web_served','emergency_shadow','thai_time'):
-            if data.get(key) is not True:
-                raise RuntimeError('Packaged GUI did not verify: ' + key)
-        if data.get('real_notifications') != 0:
-            raise RuntimeError('GUI smoke must not use live notifications')
+        validate_smoke_report(data)
         print(json.dumps(data, indent=2))
 
 

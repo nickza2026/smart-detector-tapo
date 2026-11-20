@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "feature_version": 2,
+  "profile_id": "field_camera_v48",
+  "camera_id": "provided-recordings",
+  "templates": [
+    {
+      "kind": "paid_ready",
+      "file": "ready.wav",
+      "sha256": "d10177ae6d0e5d7609ef99bac0612181bc047dec98e590f1521213c439f28f77",
+      "start": 4.0,
+      "end": 8.0,
+      "threshold": 0.6,
+      "temporal_threshold": 0.2,
+      "alternates": [{"start": 2.0, "end": 6.0}]
+    },
+    {
+      "kind": "end",
+      "file": "end.wav",
+      "sha256": "c1c418249b666112b86715d797c25662392574ac30fd0ec28aea3317e15c32c9",
+      "start": 2.0,
+      "end": 4.0,
+      "threshold": 0.55,
+      "temporal_threshold": 0.3
+    }
+  ]
+}

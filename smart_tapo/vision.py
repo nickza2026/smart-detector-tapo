@@ -18,6 +18,44 @@ class Observation:
     alignment_confidence: float = 0.0
     alignment_anchor_error: float = 0.0
     roi_png: bytes = b''
+    local_score: float = 0.0
+    local_ratio: float = 0.0
+    component_area: int = 0
+
+
+def _coherent_local_presence(difference, config, anchor_error):
+    """Additional occupancy evidence, not banknote identity or a new baseline.
+
+    A small retained object can be diluted by a mostly unchanged slot ROI.
+    Require both strong local contrast and a spatially supported component.
+    Only call after successful registration; failed geometry stays UNKNOWN.
+    """
+    import cv2
+    import numpy as np
+
+    values = np.asarray(difference, dtype=np.uint8)
+    if min(values.shape) < 4:
+        return None
+    mask = cv2.morphologyEx((values >= config.pixel_threshold).astype(np.uint8),
+                            cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
+    area = 0
+    for index in range(1, len(stats)):
+        size = int(stats[index, cv2.CC_STAT_AREA])
+        if size >= values.size / 16 and float(values[labels == index].mean()) > 2 * anchor_error:
+            area = max(area, size)
+    if not area:
+        return None
+    best = None
+    for rows in np.array_split(np.arange(values.shape[0]), 4):
+        for columns in np.array_split(np.arange(values.shape[1]), 4):
+            tile = values[np.ix_(rows, columns)]
+            score = float(tile.mean())
+            ratio = float((tile >= config.pixel_threshold).mean())
+            if (score >= config.difference_threshold and ratio >= config.changed_pixel_ratio
+                    and score > 2 * anchor_error and (best is None or score > best[0])):
+                best = (score, ratio, area)
+    return best
 
 
 def load_png(source, expected_size):
@@ -86,6 +124,11 @@ class Detector:
                               ratio >= self.config.changed_pixel_ratio) else "EMPTY"
         if alignment is not None and label == 'PRESENT' and score <= alignment.anchor_error * 2:
             label = 'UNKNOWN'  # Residual camera/background error can explain this change.
+        local = None
+        if alignment is not None and label != 'PRESENT':
+            local = _coherent_local_presence(difference, self.config, alignment.anchor_error)
+            if local is not None:
+                label = 'PRESENT'
         encoded = BytesIO()
         crop.save(encoded, format='PNG')
         return Observation(label, score, ratio,
@@ -94,4 +137,5 @@ class Detector:
                            alignment.inliers if alignment else 0,
                            alignment.confidence if alignment else 0.0,
                            alignment.anchor_error if alignment else 0.0,
-                           encoded.getvalue())
+                           encoded.getvalue(),
+                           *(local if local is not None else (0.0, 0.0, 0)))
