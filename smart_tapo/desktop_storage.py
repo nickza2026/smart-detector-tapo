@@ -104,6 +104,13 @@ class DesktopStore:
 
     def save(self, config: Config):
         try:
+            if getattr(config,'capture_backend','adb')=='rtsp' and self.config_path.is_file():
+                previous=self.config_path.read_bytes()
+                old=json.loads(previous)
+                if old.get('capture_backend','adb')!='rtsp':
+                    backup=self.config_path.with_name(self.config_path.stem+'.pre-rtsp-v30.json')
+                    try:_atomic(backup,previous,create=True)
+                    except FileExistsError:pass
             _atomic(self.config_path, self._serialize(config).encode('utf-8'))
         except Exception:
             raise DesktopStorageError('Cannot save configuration; check fields and file permissions.') from None
@@ -129,8 +136,72 @@ class DesktopStore:
         except Exception:
             raise DesktopStorageError('Cannot save credentials; Windows DPAPI and writable storage are required.') from None
 
+    def load_refueling_key(self, base_url, camera_id):
+        try:
+            from .refueling_webhook import WebhookTarget
+            target = WebhookTarget(base_url, 'validation-only-key', camera_id)
+            path = self.root / 'refueling-api.dat'
+            if not path.exists():
+                return ''
+            envelope = json.loads(_dpapi(path.read_bytes(), decrypt=True))
+            if (set(envelope) != {'base_url', 'camera_id', 'key'}
+                    or envelope['base_url'] != target.base_url or envelope['camera_id'] != camera_id):
+                raise ValueError()
+            return WebhookTarget(base_url, envelope['key'], camera_id).token
+        except Exception:
+            raise DesktopStorageError('Cannot read Refueling API credential; encrypted file preserved.') from None
+
+    def save_refueling_key(self, key, base_url, camera_id):
+        try:
+            from .refueling_webhook import WebhookTarget
+            target = WebhookTarget(base_url, key, camera_id)
+            encrypted = _dpapi(json.dumps({'base_url': target.base_url, 'camera_id': camera_id,
+                                           'key': key}).encode('utf-8'))
+            _atomic(self.root / 'refueling-api.dat', encrypted)
+        except Exception:
+            raise DesktopStorageError('Cannot save Refueling API credential; Windows DPAPI required.') from None
+
     def clear_credentials(self):
         try:
             self._credentials_path.unlink(missing_ok=True)
         except OSError:
             raise DesktopStorageError('Cannot remove saved credentials.') from None
+
+    def load_notify_key(self, base_url, camera_id):
+        """Only this endpoint/camera's Notify key; never reinterpret Pushover data."""
+        try:
+            from .notify_api import NotifyTarget
+            from .announcement_profile import _identifier
+            if not _identifier(camera_id):
+                raise ValueError()
+            target = NotifyTarget(base_url, 'validation-only-key')
+            path = self.root / 'notify-api.dat'
+            if not path.exists():
+                return ''
+            envelope = json.loads(_dpapi(path.read_bytes(), decrypt=True))
+            if (type(envelope) is not dict or set(envelope) != {'base_url', 'camera_id', 'key'}
+                    or envelope['base_url'] != target.base_url or envelope['camera_id'] != camera_id):
+                raise ValueError()
+            return NotifyTarget(base_url, envelope['key']).key
+        except Exception:
+            raise DesktopStorageError('Cannot read Notify API credential; encrypted file preserved.') from None
+
+    def save_notify_key(self, key, base_url, camera_id):
+        """Current-user DPAPI, explicitly separate from all legacy credentials."""
+        try:
+            from .notify_api import NotifyTarget
+            from .announcement_profile import _identifier
+            if not _identifier(camera_id):
+                raise ValueError()
+            target = NotifyTarget(base_url, key)
+            encrypted = _dpapi(json.dumps({'base_url': target.base_url, 'camera_id': camera_id,
+                                           'key': target.key}).encode('utf-8'))
+            _atomic(self.root / 'notify-api.dat', encrypted)
+        except Exception:
+            raise DesktopStorageError('Cannot save Notify API credential; Windows DPAPI required.') from None
+
+    def clear_notify_key(self):
+        try:
+            (self.root / 'notify-api.dat').unlink(missing_ok=True)
+        except OSError:
+            raise DesktopStorageError('Cannot remove saved Notify API credential.') from None

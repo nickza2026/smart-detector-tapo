@@ -36,17 +36,41 @@ class Config:
     roi: Rect = Rect(340, 265, 100, 110)
     clock_roi: Rect = Rect(0, 132, 280, 21)
     capture_interval_seconds: float = 1.0
+    # Legacy default is retained for injected ADB adapters and existing configs.
+    # The desktop and production capture CLI explicitly select RTSP.
+    capture_backend: str = 'adb'
+    rtsp_url: str = 'rtsp://127.0.0.1:8554/tapo_c500'
+    rtsp_open_timeout_seconds: float = 5.0
+    rtsp_read_timeout_seconds: float = 3.0
+    rtsp_reconnect_seconds: float = 1.0
+    rtsp_max_receive_age_seconds: float = 2.0
+    rtsp_source_binding: str = ''
+    # Existing configs remain legacy until the operator explicitly enables windows.
+    clock_window_enabled: bool = False
+    clock_check_interval_seconds: float = 2.0
     stuck_consecutive_frames: int = 10
     clear_consecutive_frames: int = 2
+    stuck_minimum_seconds: float = 0.0
+    clear_minimum_seconds: float = 0.0
+    # An open, not-yet-stuck event survives UNKNOWN frames or a broken frame
+    # sequence for at most this long since its last trusted observation; 0 closes
+    # it as incomplete immediately (legacy behaviour).
+    event_gap_tolerance_seconds: float = 2.0
+    # RTSP only: every decoded frame classifies a note at the ROI as passed or
+    # pulled back, which reconciles the sampled ROI events.
+    passage_tracking_enabled: bool = True
     max_frame_gap_seconds: float = 1.8
     max_live_age_seconds: float = 5.0
     poll_interval_seconds: float = 0.25
     reminder_interval_seconds: float = 60.0
+    refueling_api_url: str = ""
+    refueling_api_enabled: bool = False
     notify_enabled: bool = False
-    notification_priority: int = 1
-    emergency_retry_seconds: int = 60
-    emergency_expire_seconds: int = 10800
-    emergency_poll_seconds: int = 10
+    notify_api_url: str = 'https://notify-alarm-api-7496986423345747739.olufy-0.nortezh.com'
+    notify_importance: str = 'normal'
+    health_notify_enabled: bool = True
+    health_failure_seconds: float = 30.0
+    health_repeat_seconds: float = 900.0
     history_web_port: int = 8080
     difference_threshold: float = 15.0
     changed_pixel_ratio: float = 0.12
@@ -65,6 +89,9 @@ class Config:
     camera_name: str = "กล้องในตู้"
     adb_timeout_seconds: float = 15.0
     startup_timeout_seconds: float = 120.0
+    windows_startup_enabled: bool = False
+    windows_startup_audio: bool = False
+    windows_startup_binding: str = ''
     ui_check_interval_seconds: float = 10.0
     alignment_enabled: bool = True
     alignment_min_inliers: int = 20
@@ -79,22 +106,53 @@ class Config:
     alignment_spatial_tolerance_pixels: int = 2
 
     def validate(self):
-        if type(self.notification_priority) is not int or self.notification_priority not in (1,2):
-            raise ValueError('Notification priority must be 1 or 2')
-        for name,minimum,maximum in (('emergency_retry_seconds',30,10800),
-                ('emergency_expire_seconds',1,10800),('emergency_poll_seconds',5,3600)):
-            value=getattr(self,name)
-            if type(value) is not int or not minimum<=value<=maximum:
-                raise ValueError(name+' is outside the supported integer range')
+        from .notify_api import NotifyTarget
+        NotifyTarget(self.notify_api_url, 'validation-only-key')
+        if self.notify_importance not in ('normal', 'critical'):
+            raise ValueError('Invalid Notify API importance')
+        if self.capture_backend not in ('adb', 'rtsp'):
+            raise ValueError('Invalid image capture backend')
+        from .capture.rtsp import validate_rtsp_url
+        validate_rtsp_url(self.rtsp_url)
+        for name in ('rtsp_open_timeout_seconds', 'rtsp_read_timeout_seconds',
+                     'rtsp_reconnect_seconds', 'rtsp_max_receive_age_seconds'):
+            value = getattr(self, name)
+            if type(value) not in (int, float) or not math.isfinite(value) or not .1 <= value <= 30:
+                raise ValueError(name + ' must be between 0.1 and 30 seconds')
+        if not isinstance(self.rtsp_source_binding, str) or (self.rtsp_source_binding and
+                re.fullmatch('[0-9a-f]{64}', self.rtsp_source_binding) is None):
+            raise ValueError('Invalid RTSP calibration source binding')
+        if any(type(value) is not bool for value in (self.windows_startup_enabled, self.windows_startup_audio)):
+            raise ValueError('Windows startup flags must be boolean')
+        if not isinstance(self.windows_startup_binding, str) or len(self.windows_startup_binding) > 32768:
+            raise ValueError('Invalid Windows startup binding')
+        if self.windows_startup_audio and not self.windows_startup_enabled:
+            raise ValueError('Startup audio requires explicit Windows startup consent')
+        if type(self.clock_window_enabled) is not bool:
+            raise ValueError('clock_window_enabled must be boolean')
+        if (type(self.clock_check_interval_seconds) not in (int, float)
+                or not math.isfinite(self.clock_check_interval_seconds)
+                or not .1 <= self.clock_check_interval_seconds <= 2):
+            raise ValueError('clock_check_interval_seconds must be between 0.1 and 2 seconds')
+        if self.capture_backend != 'rtsp' and self.clock_window_enabled and self.capture_interval_seconds > self.clock_check_interval_seconds:
+            raise ValueError('Capture interval must fit the clock health window')
+        if type(self.refueling_api_enabled) is not bool:
+            raise ValueError('Refueling API enabled must be boolean')
+        if not isinstance(self.refueling_api_url, str):
+            raise ValueError('Invalid Refueling API URL')
+        if self.refueling_api_url:
+            from .refueling_webhook import WebhookTarget
+            WebhookTarget(self.refueling_api_url, 'validation-only-key', self.camera_id)
         if type(self.history_web_port) is not int or not 1 <= self.history_web_port <= 65535:
             raise ValueError('History web port must be an integer between 1 and 65535')
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", self.camera_id):
             raise ValueError("camera_id must be a safe identifier")
         if len(self.expected_size) != 2 or any(type(v) is not int or v <= 0 for v in self.expected_size):
             raise ValueError("expected_size must contain two positive integers")
-        for rect in (self.video, self.roi, self.clock_roi):
+        for rect in ((self.video, self.roi) if self.capture_backend == 'rtsp'
+                     else (self.video, self.roi, self.clock_roi)):
             rect.validate(self.expected_size)
-        for region in (self.roi, self.clock_roi):
+        for region in ((self.roi,) if self.capture_backend == 'rtsp' else (self.roi, self.clock_roi)):
             if not (self.video.x <= region.x and self.video.y <= region.y
                     and region.x + region.width <= self.video.x + self.video.width
                     and region.y + region.height <= self.video.y + self.video.height):
@@ -115,8 +173,27 @@ class Config:
             value = getattr(self, name)
             if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
                 raise ValueError(name + " must be finite and positive")
+        # One tenth of the worker poll cadence avoids an accidental busy capture loop.
+        if self.capture_interval_seconds < 0.025:
+            raise ValueError('capture_interval_seconds must be at least 0.025 seconds')
+        for name in ('stuck_minimum_seconds', 'clear_minimum_seconds'):
+            value = getattr(self, name)
+            if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+                raise ValueError(name + ' must be finite and nonnegative')
+        value = self.event_gap_tolerance_seconds
+        if type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 10:
+            raise ValueError('event_gap_tolerance_seconds must be between 0 and 10 seconds')
         if self.pixel_threshold > 255 or self.difference_threshold > 255:
             raise ValueError("Pixel/difference thresholds cannot exceed 255")
+        if type(self.passage_tracking_enabled) is not bool:
+            raise ValueError('passage_tracking_enabled must be boolean')
+        if type(self.health_notify_enabled) is not bool:
+            raise ValueError('health_notify_enabled must be boolean')
+        for name, lower, upper in (('health_failure_seconds', 1, 3600),
+                                   ('health_repeat_seconds', 60, 86400)):
+            value = getattr(self, name)
+            if type(value) not in (int, float) or not math.isfinite(value) or not lower <= value <= upper:
+                raise ValueError(name + ' is outside the supported seconds range')
         if type(self.notify_enabled) is not bool or type(self.alignment_enabled) is not bool:
             raise ValueError("notify_enabled/alignment_enabled must be booleans")
         if (type(self.alignment_min_inlier_ratio) not in (int,float)

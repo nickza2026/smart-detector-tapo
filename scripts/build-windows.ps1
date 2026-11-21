@@ -20,8 +20,8 @@ $Python = Join-Path (Get-Location) ".venv-build\Scripts\python.exe"
 Run-Checked -Program $Python -Arguments @("-m", "pip", "install", "-r", "requirements-build.txt")
 Run-Checked -Program $Python -Arguments @("-m", "pip", "check")
 Run-Checked -Program $Python -Arguments @("-m", "unittest", "discover", "-s", "tests", "-v")
-Run-Checked -Program $Python -Arguments @("-m", "PyInstaller", "--noconfirm", "--clean", "--onefile", "--windowed", "--paths", ".", "--name", "SmartTapo", "entrypoints/desktop.py")
+Run-Checked -Program $Python -Arguments @("-m", "PyInstaller", "--noconfirm", "--clean", "--onefile", "--windowed", "--paths", ".", "--name", "SmartTapo", "--add-data", "smart_tapo/assets/prepared-profile;smart_tapo/assets/prepared-profile", "entrypoints/desktop.py")
 Run-Checked -Program $Python -Arguments @("-m", "scripts.smoke_packaged", "--dist", "dist")
 Copy-Item "README.md" "dist/README.md" -Force
 Write-Host "Built windowed SmartTapo.exe in dist. Double-click it for first-run setup. ADB and MEmu must be installed separately."
-Write-Host "No camera or Pushover was contacted by this build. Live Windows integration still requires operator testing."
+Write-Host "No camera or Notify API was contacted by this build. Live Windows integration still requires operator testing."

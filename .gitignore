@@ -18,5 +18,21 @@ tapo-screen*.png
 # Original supplied draft is local-only; current reviewed plans are versioned.
 plan.md
 pushover.dat
+notify-api.dat
 calibration-state.json
 desktop.lock
+# Supplied real camera audio is private input, not publication/build material.
+/sound/
+/prepared-profile/
+# Local camera samples, analysis scratch, and per-machine agent setup.
+/empty.png
+*.mp4
+*.mkv
+*.avi
+.tmp_analysis/
+.cursor/
+# Tooling caches and logs.
+.pytest_cache/
+.coverage
+*.log
+Thumbs.db

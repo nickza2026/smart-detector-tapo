@@ -8,6 +8,7 @@ import time
 import unittest
 from contextlib import closing
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 from unittest.mock import patch
@@ -19,6 +20,26 @@ from smart_tapo.history_web import HistoryWebServer
 
 
 class HistoryWebTests(unittest.TestCase):
+    def test_old_portrait_evidence_survives_rtsp_landscape_geometry_change(self):
+        self.event()
+        path=self.image(size=(720,1280))
+        original=path.read_bytes()
+        self.config=replace(self.config,expected_size=(1920,1080))
+        self.login()
+        status,_,body=self.request('/image?id=evt&role=first_full')
+        self.assertEqual(status,200)
+        self.assertEqual(body,original)
+
+    def test_old_portrait_evidence_survives_rtsp_landscape_geometry_change(self):
+        self.event()
+        path=self.image(size=(720,1280))
+        original=path.read_bytes()
+        self.config=replace(self.config,expected_size=(1920,1080))
+        self.login()
+        status,_,body=self.request('/image?id=evt&role=first_full')
+        self.assertEqual(status,200)
+        self.assertEqual(body,original)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -79,6 +100,25 @@ class HistoryWebTests(unittest.TestCase):
         self.cookie = headers['Set-Cookie'].split(';', 1)[0]
         self.assertEqual(body, b'')
 
+    def test_thai_time_list_and_detail_preserve_database_timestamps(self):
+        started = datetime(2026, 10, 27, 17, 30, tzinfo=timezone.utc).timestamp()
+        self.event(started=started, closed=started+180)
+        with closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute('UPDATE events SET last_present=?,first_clear=? WHERE id=?',
+                       (started+60, started+120, 'evt'))
+        self.login()
+        status, _, body = self.request()
+        self.assertEqual(status, 200)
+        self.assertIn('2026-10-28T00:30:00+07:00', body.decode())
+        self.assertIn('เวลาไทย (UTC+7)', body.decode())
+        status, _, body = self.request('/event?id=evt')
+        self.assertEqual(status, 200)
+        for minute in (30, 31, 32, 33):
+            self.assertIn(f'2026-10-28T00:{minute}:00+07:00', body.decode())
+        with closing(sqlite3.connect(self.db_path)) as db:
+            self.assertEqual(db.execute('SELECT started,last_present,first_clear,closed FROM events').fetchone(),
+                             (started, started+60, started+120, started+180))
+
     def test_auth_bootstrap_security_headers_and_snapshot(self):
         self.assertEqual(self.request()[0], 403)
         self.assertEqual(self.request('/image?id=evt&role=first')[0], 403)
@@ -138,7 +178,8 @@ class HistoryWebTests(unittest.TestCase):
         self.assertEqual(self.request('/image?id=evt&role=first_full')[0], 404)
         path.write_bytes(b'not png')
         self.assertEqual(self.request('/image?id=evt&role=first_full')[0], 404)
-        Image.new('RGB', (721, 1)).save(path)
+        # Historical dimensions no longer follow the current stream width.
+        Image.new('RGB', (8193, 1)).save(path)
         self.assertEqual(self.request('/image?id=evt&role=first_full')[0], 404)
         self.event('old', 'normal_visual', started=1, closed=time.time() - 25 * 3600)
         self.image('old')

@@ -150,6 +150,44 @@ class DepositRetentionTests(unittest.TestCase):
         self.assertEqual(len(self.evidence()), 1)
         self.assertIsNotNone(self.worker.db.execute('SELECT * FROM events').fetchone())
 
+    def test_brief_unknown_during_passage_still_closes_as_normal(self):
+        # Real clip: a falling banknote made one aligned frame ambiguous.
+        self.frame('PRESENT')
+        self.frame('PRESENT')
+        self.frame('UNKNOWN')
+        self.frame('EMPTY')
+        self.frame('EMPTY')
+        events = self.worker.db.execute('SELECT kind FROM events').fetchall()
+        self.assertEqual([row['kind'] for row in events], ['normal_visual'])
+
+    def test_dropped_frame_during_passage_still_closes_as_normal(self):
+        self.frame('PRESENT')
+        self.sequence += 1
+        self.frame('EMPTY')
+        self.frame('EMPTY')
+        events = self.worker.db.execute('SELECT kind FROM events').fetchall()
+        self.assertEqual([row['kind'] for row in events], ['normal_visual'])
+
+    def test_zero_gap_tolerance_keeps_legacy_incomplete(self):
+        self.worker.close()
+        self.config = replace(self.config, event_gap_tolerance_seconds=0)
+        self.worker = Worker(self.config, self.detector, clock=lambda: self.now)
+        self.frame('PRESENT')
+        self.frame('UNKNOWN')
+        self.frame('EMPTY')
+        self.frame('EMPTY')
+        events = self.worker.db.execute('SELECT kind FROM events').fetchall()
+        self.assertEqual([row['kind'] for row in events], ['incomplete'])
+
+    def test_unknown_resets_stuck_proof_inside_tolerated_event(self):
+        for _ in range(9):
+            self.frame('PRESENT')
+        self.frame('UNKNOWN')
+        self.frame('PRESENT')
+        event = self.worker.db.execute('SELECT kind FROM events').fetchone()
+        self.assertEqual(event['kind'], 'candidate')
+        self.assertEqual(self.worker.count, 1)
+
     def test_stuck_and_incomplete_keep_legacy_ttls(self):
         for _ in range(10):
             self.frame('PRESENT')
@@ -168,7 +206,8 @@ class DepositRetentionTests(unittest.TestCase):
         self.worker.cleanup()
         self.assertIsNone(self.worker.db.execute('SELECT * FROM events').fetchone())
         self.frame('PRESENT')
-        self.frame('UNKNOWN')
+        for _ in range(3):
+            self.frame('UNKNOWN')
         event = self.worker.db.execute('SELECT * FROM events').fetchone()
         self.assertEqual(event['kind'], 'incomplete')
         self.now += 301

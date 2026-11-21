@@ -1,0 +1,4 @@
+# Optional signature verifier / isolated offline signing environment.
+# Version verified against https://pypi.org/pypi/cryptography/json 2026-11-08.
+# Do not install into the shared project symlink environment.
+cryptography==50.0.2

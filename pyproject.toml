@@ -5,9 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "smart-tapo"
 version = "0.1.0"
-description = "Local MEmu capture and visual-occupancy worker prototype"
+description = "Independent RTSP video/audio observation and announcement history"
 requires-python = ">=3.12"
-dependencies = ["Pillow==13.0.0", "numpy==2.5.4", "opencv-python-headless==5.0.0.93"]
+dependencies = ["Pillow==13.0.0", "numpy==2.5.4", "opencv-python-headless==5.0.0.93", "av==19.0.2", "cryptography==50.0.2"]
+
+[project.optional-dependencies]
+legacy-windows-tests = ["PyAudioWPatch==0.2.12.9; sys_platform == 'win32'"]
 
 [project.scripts]
 smart-tapo-capture = "smart_tapo.capture.__main__:main"

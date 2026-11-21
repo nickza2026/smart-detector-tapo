@@ -5,8 +5,9 @@ import os
 import re
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from .clock_epoch import current_clock_epoch
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,9 @@ class Frame:
     image_name: str
     fresh: bool
     health: str = "healthy"
+    clock_epoch: str | None = field(default_factory=current_clock_epoch)
+    window_proof: dict | None = None
+    source_proof: dict | None = None
 
 
 def atomic_bytes(path, content):
@@ -47,7 +51,7 @@ def atomic_bytes(path, content):
 
 
 def publish_frame(config, png, session_id, sequence, fresh, health="healthy",
-                  captured_at=None, captured_monotonic=None):
+                  captured_at=None, captured_monotonic=None, window_proof=None, source_proof=None):
     """Publish the immutable image before its ready marker; never overwrite a frame."""
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", session_id):
         raise ValueError("Invalid capture session ID")
@@ -59,7 +63,8 @@ def publish_frame(config, png, session_id, sequence, fresh, health="healthy",
     frame = Frame(frame_id, config.camera_id, session_id, sequence,
                   time.time() if captured_at is None else captured_at,
                   time.monotonic() if captured_monotonic is None else captured_monotonic,
-                  config.expected_size[0], config.expected_size[1], image.name, bool(fresh), health)
+                  config.expected_size[0], config.expected_size[1], image.name, bool(fresh), health,
+                  window_proof=window_proof, source_proof=source_proof)
     atomic_bytes(image, png)
     marker = folder / (frame_id + ".ready.json")
     atomic_bytes(marker, json.dumps(asdict(frame), allow_nan=False).encode("utf-8"))
@@ -73,7 +78,15 @@ def read_frame(marker, config):
         raise ValueError("Frame folder outside managed data directory")
     if marker.is_symlink() or marker.resolve().parent != expected:
         raise ValueError("Frame marker outside managed spool")
-    frame = Frame(**json.loads(marker.read_text(encoding="utf-8")))
+    payload=json.loads(marker.read_text(encoding="utf-8"))
+    if not isinstance(payload,dict):raise ValueError('Invalid frame metadata')
+    # Legacy spool is readable for history, but cannot acquire this boot's
+    # provenance merely through deserializing a missing optional field.
+    payload.setdefault('clock_epoch',None)
+    frame = Frame(**payload)
+    if frame.clock_epoch is not None and (not isinstance(frame.clock_epoch,str)
+            or re.fullmatch('[0-9a-f]{64}',frame.clock_epoch) is None):
+        raise ValueError('Invalid frame clock epoch')
     if frame.camera_id != config.camera_id or not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", frame.frame_id):
         raise ValueError("Invalid frame identity")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", frame.session_id):
@@ -96,7 +109,7 @@ def read_frame(marker, config):
 
 def image_storage_bytes(config):
     total = 0
-    for subfolder in ("frames", "events"):
+    for subfolder in ("frames", "events", "pending"):
         root = config.data_dir / subfolder
         if root.is_symlink():
             raise ValueError("Managed image directory must not be a symlink")
