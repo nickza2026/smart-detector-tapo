@@ -191,6 +191,42 @@ class RtspControlsTests(unittest.TestCase):
                 self.assertEqual(len(self.runtime.calls), 1); self.assertFalse(self.panel.is_running)
                 self.panel.stop()
 
+    def test_display_only_saved_change_does_not_cancel_consented_retry(self):
+        self.start_watch()
+        self.config = replace(self.config, history_web_port=8081)
+        self.terminal('audio_timeout')
+        self.now += 15
+        self.panel.poll()
+        self.assertEqual(len(self.runtime.calls), 2)
+        self.assertTrue(self.listener._health_expected)
+        self.assertEqual(self.runtime.calls[-1][0].history_web_port, 8080)
+
+    def test_storage_or_camera_change_still_cancels_retry_until_new_consent(self):
+        for changes in ({'camera_id': 'other-camera'}, {'data_dir': Path(self.temp.name)/'other-data'}):
+            with self.subTest(fields=tuple(changes)):
+                self.runtime.calls.clear()
+                self.start_watch()
+                self.config = replace(self.config, **changes)
+                self.terminal('audio_timeout')
+                self.now += 15
+                self.panel.poll()
+                self.assertEqual(len(self.runtime.calls), 1)
+                self.assertFalse(self.listener._health_expected)
+                self.assertFalse(self.listener.consent.get())
+                self.panel.stop()
+
+    def test_disabled_start_explains_pending_saved_settings_without_private_values(self):
+        self.listener.profile_path.set(str(self.profile))
+        self.current = False
+        self.listener.consent.set(True)
+        self.assertEqual(str(self.listener.start_button.cget('state')), 'disabled')
+        self.assertIn('บันทึก', getattr(self.listener, 'start_hint', self.listener.status).get())
+        self.current = True
+        self.panel.poll()
+        self.assertEqual(str(self.listener.start_button.cget('state')), 'normal')
+        self.listener.start_button.invoke()
+        self.assertEqual(len(self.runtime.calls), 1)
+
     def test_storage_retry_is_paced_and_safe(self):
         for code in ('storage_busy', 'storage_full', 'storage_permission', 'storage_io_error'):
             self.runtime.calls.clear()

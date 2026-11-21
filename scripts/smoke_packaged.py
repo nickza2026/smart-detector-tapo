@@ -105,7 +105,7 @@ def validate_smoke_report(data):
                 'rtsp_audio_stopped_reaped', 'notify_test_fake_only',
                 'notify_history_gui', 'notify_history_both_outcomes',
                 'notify_history_redacted', 'notify_history_fake_only',
-                'webhook_observation_delivery_completed'):
+                'webhook_observation_delivery_completed', 'rtsp_audio_recovery_controls_gui'):
         if data.get(key) is not True:
             raise RuntimeError('Packaged GUI did not verify: ' + key)
     if type(data.get('real_notifications')) is not int or data['real_notifications'] != 0:

@@ -21,6 +21,11 @@ from .storage_diagnostics import format_guard_evidence
 from .audio_recovery import AudioRecovery
 
 
+def audio_source_identity(config):
+    """Exact source/store inputs consumed by the RTSP audio child, never logged."""
+    return config.camera_id, config.data_dir, config.rtsp_url
+
+
 class RtspListenerPanel(ListenerPanel):
     def __init__(self, parent, config_getter, *, runtime=None, other_running=lambda: False,
                  prepared_manifest=None, settings_current=lambda: True, clock=time.monotonic):
@@ -56,6 +61,7 @@ class RtspListenerPanel(ListenerPanel):
         self.profile_path = StringVar(master=self)
         self.consent = BooleanVar(master=self, value=False)
         self.status = StringVar(master=self, value='ยังไม่รับเสียง — เลือกโปรไฟล์และยินยอมก่อนเริ่ม')
+        self.start_hint = StringVar(master=self)
         self.device_summary = StringVar(master=self)
         self.count = StringVar(master=self, value='พร้อมเติมหลังรับเงิน: 0 | เสียงจบ: 0\nรวม 0 ประกาศ — ไม่ใช่จำนวนรอบเติม')
         self.health_status = StringVar(master=self, value='ยังไม่มีข้อมูลสุขภาพ — ไม่เก็บไฟล์เสียง')
@@ -79,6 +85,7 @@ class RtspListenerPanel(ListenerPanel):
         self.start_button.pack(side='left', padx=(0,8))
         self.stop_button = ttk.Button(row, text='หยุดฟัง', command=self.stop)
         self.stop_button.pack(side='left')
+        ttk.Label(self, textvariable=self.start_hint, wraplength=750).pack(anchor='w')
         for variable in (self.status, self.count, self.health_status):
             ttk.Label(self, textvariable=variable, wraplength=750).pack(anchor='w', pady=4)
         self.profile_path.trace_add('write', lambda *_: self._buttons())
@@ -116,7 +123,7 @@ class RtspListenerPanel(ListenerPanel):
         from .startup import profile_digest
         try:
             current = self.get_config()
-            if current != self._watch_config:
+            if audio_source_identity(current) != audio_source_identity(self._watch_config):
                 raise ValueError
             if not self._settings_ready() or self.profile_path.get().strip() != self._watch_path or profile_digest(self._watch_path) != self._watch_digest:
                 raise ValueError
@@ -124,6 +131,7 @@ class RtspListenerPanel(ListenerPanel):
             self._watching, self._retry_at = False, None
             self._recovery.reset()
             self._health_expected = False
+            self.consent.set(False)
             self.status.set('แหล่งหรือโปรไฟล์เปลี่ยน — ยกเลิกลองใหม่ ต้องยินยอมเริ่มใหม่')
             return
         if self.runtime.is_running:
@@ -202,8 +210,23 @@ class RtspListenerPanel(ListenerPanel):
         if not self.tk.call('info','commands',self._w):return
         busy = self.is_running or self.closing
         self.device_summary.set('แหล่งเสียง: RTSP URL ที่บันทึกในแท็บตั้งค่า (ไม่แสดง URL)')
-        allowed = not busy and not self._other_busy() and self._settings_ready() and bool(self.profile_path.get().strip()) and self.consent.get()
+        other_busy, settings_ready = self._other_busy(), self._settings_ready()
+        selected = bool(self.profile_path.get().strip())
+        allowed = not busy and not other_busy and settings_ready and selected and self.consent.get()
         self.start_button.configure(state='normal' if allowed else 'disabled')
+        if busy:
+            hint = 'กำลังรับเสียงหรือรอลองแหล่งเดิม — กดหยุดได้ก่อนเริ่มรอบใหม่'
+        elif other_busy:
+            hint = 'รอการทำงานเบื้องหลังให้เสร็จก่อนเริ่มรับเสียง'
+        elif not settings_ready:
+            hint = 'บันทึก RTSP URL รหัสกล้อง และโฟลเดอร์ข้อมูลในแท็บตั้งค่าก่อนเริ่มเสียง'
+        elif not selected:
+            hint = 'เลือกโปรไฟล์ก่อนเริ่มรับเสียง'
+        elif not self.consent.get():
+            hint = 'ติ๊กยินยอมแล้วกดเริ่มฟัง RTSP เพื่อเริ่มรอบใหม่'
+        else:
+            hint = 'พร้อมเริ่มรับเสียง RTSP'
+        self.start_hint.set(hint)
         self.stop_button.configure(state='normal' if (self.is_running or getattr(self,'_health_expected',False)) and not self.closing else 'disabled')
         for widget in (self.path_entry, self.browse_button, self.consent_box, self.create_button, self.prepared_button):
             widget.configure(state='disabled' if busy else 'normal')
@@ -438,10 +461,12 @@ class RtspListenerPanel(ListenerPanel):
 
 
 class RtspAudioPanel(ttk.Frame):
-    def __init__(self, parent, config_getter, *, runtime=None, settings_current=lambda: True):
+    def __init__(self, parent, config_getter, *, runtime=None, settings_current=lambda: True,
+                 other_running=lambda: False):
         super().__init__(parent, padding=14)
         self.modes = ttk.Notebook(self); self.modes.pack(fill='both', expand=True)
-        self.listener_panel = RtspListenerPanel(self.modes, config_getter, runtime=runtime, settings_current=settings_current)
+        self.listener_panel = RtspListenerPanel(self.modes, config_getter, runtime=runtime,
+            settings_current=settings_current, other_running=other_running)
         self.modes.add(self.listener_panel, text='ฟัง RTSP ต่อเนื่อง')
         self.status = self.listener_panel.status
 

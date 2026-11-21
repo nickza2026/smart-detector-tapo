@@ -9,6 +9,59 @@ import numpy as np
 from PIL import Image,ImageDraw
 
 
+def smoke_audio_rearm(root, app, profile):
+    """Actual widgets/frozen module, fake producer; never open a new source."""
+    listener=app.audio_panel.listener_panel
+    original=(listener.runtime,listener.clock,app.config,listener.profile_path.get())
+    class Runtime:
+        is_running=False
+        profile_fingerprint='synthetic-rearm-fingerprint'
+        def __init__(self):self.calls=[];self.events=[]
+        def start(self,config,device,path,**options):
+            self.calls.append(config);self.is_running=True
+        def stop(self):self.is_running=False
+        def poll(self):
+            events,self.events=self.events,[]
+            return events
+    fake=Runtime();now=[100.]
+    try:
+        listener.runtime=fake;listener.clock=lambda:now[0]
+        listener.profile_path.set(str(profile));listener.consent.set(True)
+        app.notebook.select(app.audio_panel);app.audio_panel.modes.select(listener);root.update()
+        listener.start_button.invoke()
+        if len(fake.calls)!=1:raise RuntimeError('Audio manual start blocked')
+        app._remember_history_port(8081 if app.config.history_web_port!=8081 else 8082)
+        app._half_second_preset()
+        fake.is_running=False;fake.events=[dict(kind='error',code='audio_timeout')]
+        listener.poll();now[0]+=15;listener.poll()
+        if len(fake.calls)!=2 or fake.calls[0]!=fake.calls[1] or not listener._health_expected:
+            raise RuntimeError('Unrelated settings cancelled consented audio recovery')
+        fake.is_running=False;fake.events=[dict(kind='error',code='audio_timeout')]
+        listener.poll()
+        app.config=replace(app.config,rtsp_url='rtsp://127.0.0.1:8554/synthetic-rearm-new')
+        app.form['rtsp_url'].set(app.config.rtsp_url)
+        now[0]+=15;listener.poll()
+        if listener.is_running or listener.consent.get():raise RuntimeError('Changed source retained consent')
+        listener.consent.set(True)
+        if listener.start_button.instate(['disabled']):raise RuntimeError('Audio start remained locked after reconsent')
+        listener.start_button.invoke()
+        if len(fake.calls)!=3 or fake.calls[-1].rtsp_url!=app.config.rtsp_url:
+            raise RuntimeError('Audio rearm did not start the newly consented source')
+        listener.stop()
+        app.form['rtsp_url'].set('rtsp://127.0.0.1:8554/synthetic-unsaved')
+        listener.consent.set(True)
+        if not listener.start_button.instate(['disabled']) or 'บันทึก' not in listener.start_hint.get():
+            raise RuntimeError('Unsaved audio source did not expose its admission blocker')
+        return {'rtsp_audio_recovery_controls_gui':True}
+    finally:
+        listener.stop()
+        listener.runtime,listener.clock,app.config,old_path=original
+        app.store.save(app.config)
+        for key in ('rtsp_url','capture_interval_seconds','clock_check_interval_seconds'):
+            app.form[key].set(str(getattr(app.config,key)))
+        listener.profile_path.set(old_path);listener.consent.set(False)
+
+
 def smoke_av_gui(root,app,history):
     from tests.rtsp_av_fixture import SyntheticAV,jpeg_payload
     from .continuous_smoke import smoke_prepared_reference,_phrase,_end_phrase
@@ -53,6 +106,7 @@ def smoke_av_gui(root,app,history):
         for x in range(0,320,12):draw.rectangle((x,y,x+5,y+5),fill=((x*7)%255,(y*3)%255,(x+y)%255))
     occupied=image.copy();ImageDraw.Draw(occupied).rectangle((120,80,195,155),fill='white')
     listener=app.audio_panel.listener_panel
+    result.update(smoke_audio_rearm(root,app,profile))
     events=[];poll=listener.runtime.poll
     def observe():
         rows=poll();events.extend(rows);return rows

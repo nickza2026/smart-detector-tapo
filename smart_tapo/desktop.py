@@ -101,7 +101,7 @@ class DesktopApp:
         self.webhook_panel=WebhookPanel(self.notebook,lambda:self.config,self._save_webhook_config,self.store)
         self.notebook.add(self.webhook_panel,text='Refueling API v1')
         self.audio_panel=RtspAudioPanel(self.notebook,lambda:self.config,
-            settings_current=lambda:self._candidate()==self.config and not self.busy)
+            settings_current=self._audio_settings_current,other_running=lambda:self.busy)
         from .desktop_offline_audio import OfflineAudioPanel
         self.offline_audio_panel=OfflineAudioPanel(self.audio_panel.modes,lambda:self.config,self.audio_panel.listener_panel)
         self.audio_panel.modes.add(self.offline_audio_panel,text='ไฟล์ WAV (ทางเลือก)')
@@ -494,6 +494,17 @@ class DesktopApp:
             self._error('มีงานกำลังทำอยู่ ยังไม่เปลี่ยนโฟลเดอร์')
             return
         self.form['data_dir'].set(path)
+
+    def _audio_settings_current(self):
+        # Image/Notify drafts and transient image work do not change a consented
+        # audio source. Startup still uses the full candidate/binding guards.
+        from .desktop_rtsp_audio import audio_source_identity
+        from .storage_location import normalize_location
+        updates={key:self.form[key].get().strip() for key in ('camera_id','rtsp_url','data_dir')
+                 if key in self.form}
+        if 'data_dir' in updates:
+            updates['data_dir']=normalize_location(updates['data_dir'],self.store.root)
+        return audio_source_identity(replace(self.config,**updates))==audio_source_identity(self.config)
 
     def _candidate(self):
         updates={key:var.get().strip() for key,var in self.form.items()}

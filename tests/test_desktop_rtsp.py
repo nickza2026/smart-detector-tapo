@@ -97,6 +97,109 @@ class DesktopRtspTests(unittest.TestCase):
             if 'text' in w.keys():labels.append(w.cget('text'))
         self.assertFalse(any('ADB' in value or 'MEmu' in value for value in labels))
 
+    def test_audio_start_does_not_depend_on_unsaved_image_or_notification_fields(self):
+        listener = self.app.audio_panel.listener_panel
+        listener.profile_path.set('synthetic-profile.json')
+        self.app.form['capture_interval_seconds'].set('0.5')
+        self.app.form['health_repeat_seconds'].set('not-a-number')
+        listener.consent.set(True)
+        self.assertEqual(str(listener.start_button.cget('state')), 'normal')
+
+    def test_audio_start_stays_blocked_for_unsaved_source_and_busy_operation(self):
+        listener = self.app.audio_panel.listener_panel
+        listener.profile_path.set('synthetic-profile.json')
+        self.app.form['rtsp_url'].set('rtsp://127.0.0.1:8554/changed')
+        listener.consent.set(True)
+        self.assertEqual(str(listener.start_button.cget('state')), 'disabled')
+        self.assertIn('บันทึก', getattr(listener, 'start_hint', listener.status).get())
+        self.app.form['rtsp_url'].set(self.app.config.rtsp_url)
+        self.app.busy = True
+        listener._buttons()
+        self.assertEqual(str(listener.start_button.cget('state')), 'disabled')
+        self.app.busy = False
+        listener._buttons()
+        self.assertEqual(str(listener.start_button.cget('state')), 'normal')
+
+    def test_actual_unrelated_callbacks_and_busy_work_do_not_cancel_audio_recovery(self):
+        from tests.test_desktop_rtsp_audio import PureFakeRuntime
+        listener = self.app.audio_panel.listener_panel
+        profile = Path(self.temp.name)/'synthetic-audio-profile.json'
+        profile.write_text('{}')
+        for change in ('history_port', 'webhook', 'image_preset', 'busy'):
+            with self.subTest(change=change):
+                runtime = PureFakeRuntime()
+                runtime.profile_fingerprint = 'frozen-fingerprint'
+                listener.runtime = runtime
+                now = [100.]
+                listener.clock = lambda: now[0]
+                listener.profile_path.set(str(profile))
+                listener.consent.set(True)
+                listener.start_button.invoke()
+                self.assertEqual(len(runtime.calls), 1)
+                frozen = runtime.calls[0][0]
+                if change == 'history_port':
+                    self.app._remember_history_port(8081)
+                elif change == 'webhook':
+                    self.app._save_webhook_config(replace(self.app.config,
+                        refueling_api_url='https://receiver.example/api/v1/refueling', refueling_api_enabled=True))
+                elif change == 'image_preset':
+                    self.app._half_second_preset()
+                else:
+                    self.app.busy = True
+                runtime.is_running = False
+                runtime.events = [dict(kind='error', code='audio_timeout')]
+                self.app.audio_panel.poll()
+                now[0] += 15
+                self.app.audio_panel.poll()
+                self.assertEqual(len(runtime.calls), 2)
+                self.assertEqual(runtime.calls[-1][0], frozen)
+                self.assertTrue(listener._health_expected)
+                self.app.busy = False
+                listener.stop()
+
+    def test_source_change_cancels_then_real_start_button_can_rearm_saved_new_source(self):
+        from tests.test_desktop_rtsp_audio import PureFakeRuntime
+        listener = self.app.audio_panel.listener_panel
+        runtime = PureFakeRuntime()
+        runtime.profile_fingerprint = 'frozen-fingerprint'
+        listener.runtime = runtime
+        profile = Path(self.temp.name)/'synthetic-audio-profile.json'
+        profile.write_text('{}')
+        now = [100.]
+        listener.clock = lambda: now[0]
+        listener.profile_path.set(str(profile))
+        listener.consent.set(True)
+        listener.start_button.invoke()
+        runtime.is_running = False
+        runtime.events = [dict(kind='error', code='audio_timeout')]
+        self.app.audio_panel.poll()
+        self.app.config = replace(self.app.config, rtsp_url='rtsp://127.0.0.1:8554/new-source')
+        self.app.form['rtsp_url'].set(self.app.config.rtsp_url)
+        now[0] += 15
+        self.app.audio_panel.poll()
+        self.assertFalse(listener.is_running)
+        self.assertFalse(listener.consent.get())
+        self.assertEqual(str(listener.stop_button.cget('state')), 'disabled')
+        listener.consent.set(True)
+        self.assertEqual(str(listener.start_button.cget('state')), 'normal')
+        listener.start_button.invoke()
+        self.assertEqual(len(runtime.calls), 2)
+        self.assertEqual(runtime.calls[-1][0].rtsp_url, self.app.config.rtsp_url)
+        self.assertTrue(listener._health_expected)
+
+    def test_packaged_rearm_probe_exercises_controls_and_restores_real_runtime(self):
+        from smart_tapo.rtsp_av_smoke import smoke_audio_rearm
+        listener = self.app.audio_panel.listener_panel
+        runtime, config = listener.runtime, self.app.config
+        profile = Path(self.temp.name)/'synthetic-audio-profile.json'
+        profile.write_text('{}')
+        result = smoke_audio_rearm(self.root, self.app, profile)
+        self.assertIs(result['rtsp_audio_recovery_controls_gui'], True)
+        self.assertIs(listener.runtime, runtime)
+        self.assertEqual(self.app.config, config)
+        self.assertFalse(listener.is_running)
+        self.assertFalse(listener.consent.get())
+
     def test_snapshot_adopts_rtsp_dimensions_and_preserves_legacy_reference(self):
         self.assertTrue(self.app.save_settings())
         expected=self.app.config
