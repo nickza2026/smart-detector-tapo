@@ -134,7 +134,7 @@ class DesktopApp:
         if self._credential_error:
             self.status.set('อ่านคีย์ที่เข้ารหัสไม่ได้ กรุณากรอกคีย์ใหม่บนบัญชี Windows นี้; ไฟล์เดิมยังไม่ถูกลบ')
         from .desktop_health_alerts import HealthAlertSupervisor
-        self.health_alerts = HealthAlertSupervisor(history=self._notify_history)
+        self.health_alerts = HealthAlertSupervisor(history=self._notify_history, require_audio_preflight=True)
         self.audio_panel.listener_panel.on_health_stop = self._poll_health
         self.timer = self.root.after(200, self._poll)
 
@@ -446,9 +446,17 @@ class DesktopApp:
                 getter=getattr(owner,'health_snapshot',None)
                 if callable(getter):snapshots[channel]=getter()
         supervisor.poll(self.config,getattr(self,'_health_credentials',('', '')),snapshots)
+        # Restart/probe belongs to the Tk audio owner, never to the HTTP worker
+        # or the supervisor lock. A new ticket is required for each actual send.
+        request = getattr(supervisor, 'audio_preflight_request', None)
+        owner = self.audio_panel.listener_panel
+        service = getattr(owner, 'service_alert_recovery', None)
+        if not self.closing and callable(service):
+            service(request)
         labels={
             'disabled':'ปิดแจ้งสุขภาพระบบ', 'missing_credentials':'ไม่มีคีย์ Notify API ที่บันทึกไว้',
             'idle':'ยังไม่เริ่มเฝ้า', 'monitoring':'เฝ้าสุขภาพภาพ/เสียง',
+            'recovering_audio':'ลองเปิดเสียงใหม่ 1 ครั้งก่อนแจ้ง — รอ PCM ใหม่',
             'queued':'รอส่งแจ้งสุขภาพระบบ', 'sending':'กำลังส่งแจ้งสุขภาพระบบ',
             'accepted':'Notify API รับคำขอแล้ว — ยังไม่ยืนยันว่ามือถือดัง',
             'failed':'Notify API ยังไม่ยืนยันรับคำขอ', 'ambiguous':'ไม่ทราบแน่ชัดว่า Notify API รับแล้วหรือไม่',

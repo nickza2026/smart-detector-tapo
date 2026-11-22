@@ -50,6 +50,9 @@ def audio():
     from smart_tapo.audio_recovery import AudioRecovery
     obj = RtspListenerPanel.__new__(RtspListenerPanel)
     obj._recovery = AudioRecovery()
+    obj._prealert_probe = None
+    obj._prealert_stopping = False
+    obj._rejected_pcm_session = None
     obj._watching = False  # Snapshot-only fixture, no consented process/retry owner.
     obj._retry_at = None
     obj.clock = lambda: 12.

@@ -18,7 +18,7 @@ from .desktop_listener import ListenerPanel
 from .prepared_profile import default_prepared_manifest
 from .health_alerts import SAMPLE_MAX_AGE
 from .storage_diagnostics import format_guard_evidence
-from .audio_recovery import AudioRecovery
+from .audio_recovery import AudioRecovery, AudioAlertProbe
 
 
 def audio_source_identity(config):
@@ -40,6 +40,9 @@ class RtspListenerPanel(ListenerPanel):
         self.clock = clock
         self._watching = False
         self._recovery = AudioRecovery()
+        self._prealert_probe = None
+        self._prealert_stopping = False
+        self._rejected_pcm_session = None
         self._health_expected = False
         self._health_generation = 0
         self._health_since = self.clock()
@@ -94,7 +97,117 @@ class RtspListenerPanel(ListenerPanel):
 
     @property
     def is_running(self):
-        return self._watching or super().is_running
+        return self._watching or self._prealert_pending() or super().is_running
+
+    def _prealert_pending(self):
+        return self._prealert_probe is not None and self._prealert_probe.pending
+
+    def service_alert_recovery(self, request):
+        """Tk owner only; one restart for this ticket, never a new manual watch."""
+        from .desktop_health_alerts import AudioPreflightRequest
+        if request is None:
+            if self._prealert_pending():
+                self._watching = self._health_expected and self.runtime.is_running
+            self._prealert_probe = None
+            return
+        if (not isinstance(request, AudioPreflightRequest) or not self._health_expected
+                or request.generation != self._health_generation or self.closing or self._stopping):
+            return
+        if self._prealert_probe is None or self._prealert_probe.request is not request:
+            self._prealert_probe = AudioAlertProbe(request, self.clock())
+            self._watching, self._retry_at = False, None
+            if self.clock() >= request.deadline:
+                self._finish_alert_probe(False)
+                return
+            self.status.set('ก่อนแจ้งสุขภาพเสียง — ลองเปิดแหล่งเดิมใหม่ 1 ครั้ง กำลังรอตัวรับเดิมหยุด')
+            if not self._stop_alert_child():
+                self._health_reason = 'audio_listener_failed'
+                self._finish_alert_probe(False)
+                return
+        self._service_alert_probe()
+
+    def _stop_alert_child(self):
+        if self.runtime.is_running:
+            self._prealert_stopping = True
+        try:
+            self.runtime.stop()
+            return True
+        except Exception:
+            # Failed reap remains a failed precondition, never permission to
+            # overlap producers or crash the GUI poll/health-notification loop.
+            return False
+
+    def _alert_source_current(self):
+        from .startup import profile_digest
+        try:
+            valid = (self._watch_config is not None
+                     and audio_source_identity(self.get_config()) == audio_source_identity(self._watch_config)
+                     and self._settings_ready() and self.profile_path.get().strip() == self._watch_path
+                     and profile_digest(self._watch_path) == self._watch_digest)
+        except Exception:
+            valid = False
+        if not valid:
+            self.stop()
+            self.consent.set(False)
+            self.status.set('แหล่งหรือโปรไฟล์เปลี่ยน — ยกเลิกลองก่อนแจ้ง ต้องยินยอมเริ่มใหม่')
+        return valid
+
+    def _finish_alert_probe(self, healthy):
+        probe = self._prealert_probe
+        if probe is None:
+            return
+        probe.phase = 'healthy' if healthy else 'failed'
+        self._watching = healthy
+        if healthy:
+            self._active = True
+            self._recovery.resume_observing()
+            self.status.set('ลองก่อนแจ้งแล้วมี PCM ใหม่ที่บันทึกได้ — เฝ้าต่อ ยังไม่แจ้งปัญหา')
+        else:
+            self._stop_alert_child()
+            self._health_good = None
+            if self._health_reason in ('starting', 'unknown'):
+                self._health_reason = 'audio_no_pcm'
+            self._health_observed = self.clock()
+            self.status.set('ลองก่อนแจ้ง 1 ครั้งแล้วยังไม่พร้อม — แจ้งสุขภาพเสียงตามการตั้งค่า')
+
+    def _service_alert_probe(self):
+        probe = self._prealert_probe
+        if not self._prealert_pending():
+            return
+        if not self._health_expected or self.closing or self._stopping:
+            self._prealert_probe = None
+            return
+        if not self._alert_source_current():
+            return
+        now = self.clock()
+        if now >= probe.request.deadline:
+            self._finish_alert_probe(False)
+        elif probe.phase == 'stopping':
+            if self.runtime.is_running:
+                if now >= probe.due:
+                    self._finish_alert_probe(False)
+                return
+            # A completed reap is mandatory. Do not overlap a stuck producer.
+            self._rejected_pcm_session = self._health_pcm[0] if self._health_pcm else self._rejected_pcm_session
+            self._health_since = now
+            self._health_good = self._health_observed = self._health_pcm = None
+            self._health_reason = 'starting'
+            probe.started(now)
+            try:
+                self.runtime.start(deepcopy(self._watch_config), None, self._watch_path, consent=True,
+                                   expected_fingerprint=self._watch_fingerprint)
+                self._prealert_stopping = False
+                self._count_offset += self._epoch_total
+                self._kind_offset = tuple(a+b for a,b in zip(self._kind_offset, self._epoch_kinds))
+                self._epoch_kinds, self._epoch_total = (0, 0), 0
+                self.status.set('ลองเปิดเสียงก่อนแจ้ง 1 ครั้ง — รอ PCM ใหม่ที่ผ่านการบันทึก')
+            except Exception:
+                self._health_reason = 'audio_listener_failed'
+                self._finish_alert_probe(False)
+        elif self._health_good is not None and 0 <= now-self._health_good <= SAMPLE_MAX_AGE:
+            self._finish_alert_probe(True)
+        elif now >= probe.due or not self.runtime.is_running:
+            self._finish_alert_probe(False)
 
     def start_bound(self, config, path, *, expected_fingerprint=None):
         """Start one consented watch; retries retain these exact source/profile bytes."""
@@ -108,6 +221,9 @@ class RtspListenerPanel(ListenerPanel):
         self._health_reason = 'starting'
         self.runtime.start(frozen, None, path, consent=True, expected_fingerprint=expected_fingerprint)
         self._recovery.reset()
+        self._prealert_probe = None
+        self._prealert_stopping = False
+        self._rejected_pcm_session = None
         self._watch_config, self._watch_path, self._watch_digest = frozen, path, digest
         self._watch_fingerprint = expected_fingerprint or getattr(self.runtime, 'profile_fingerprint', None)
         self._watching, self._active, self._stopping = True, True, False
@@ -183,6 +299,7 @@ class RtspListenerPanel(ListenerPanel):
             self.runtime.stop()
 
     def stop(self):
+        self._prealert_probe = None
         self._recovery.reset()
         self._health_expected = False
         self._health_good = None
@@ -194,6 +311,7 @@ class RtspListenerPanel(ListenerPanel):
             except Exception:pass  # Optional telemetry cannot prevent stopping.
 
     def close(self):
+        self._prealert_probe = None
         self._recovery.reset()
         self._health_expected = False
         self._health_good = None
@@ -292,6 +410,8 @@ class RtspListenerPanel(ListenerPanel):
             return
         observed, begin = event.get('heartbeat'), event.get('pcm_started_at')
         frames, session = event.get('audio_frames'), event.get('pcm_session')
+        if session == self._rejected_pcm_session:
+            return
         if (any(type(v) not in (int, float) or not math.isfinite(v) for v in (observed, begin))
                 or not self._health_since <= begin <= observed <= now
                 or type(frames) is not int or frames <= 0
@@ -317,9 +437,11 @@ class RtspListenerPanel(ListenerPanel):
             reason = 'audio_no_pcm'
         return dict(expected=self._health_expected, healthy=healthy, reason=reason,
                     observed_at=self._health_observed, generation=self._health_generation,
-                    last_good_at=good, recovery_pending=(self._recovery.pending or
+                    prealert_request=self._prealert_probe.request if self._prealert_probe else None,
+                    prealert_status=self._prealert_probe.phase if self._prealert_probe else None,
+                    last_good_at=good, recovery_pending=(not self._prealert_pending() and (self._recovery.pending or
                         (self._health_expected and self._watching and good is None
-                         and self._health_reason == 'starting')))
+                         and self._health_reason == 'starting'))))
 
     def _show_health_freshness(self,now):
         sample=self.health_snapshot(now)
@@ -369,6 +491,8 @@ class RtspListenerPanel(ListenerPanel):
         self.health_status.set(self._health_detail)
 
     def poll(self):
+        if self._prealert_probe is not None and self._health_expected:
+            self._alert_source_current()
         if self._prepare_future is not None and self._prepare_future.done():
             future, self._prepare_future = self._prepare_future, None
             executor, self._prepare_executor = self._prepare_executor, None
@@ -385,8 +509,12 @@ class RtspListenerPanel(ListenerPanel):
                 if executor is not None: executor.shutdown(wait=False, cancel_futures=True)
         if (self.closing or self._stopping) and self.profile_dialog is not None and self.profile_dialog.winfo_exists():
             self.profile_dialog.request_close()
+        owned_probe_stop = self._prealert_stopping
         for event in self.runtime.poll():
             kind = event.get('kind')
+            if (owned_probe_stop or (self._prealert_pending() and self._prealert_probe.phase == 'stopping')) and kind in ('error', 'finished'):
+                self._update_counts(event)
+                continue  # Owned old-child shutdown, never the new probe's failure.
             self._accept_health(event, self.clock())
             self._update_counts(event)
             if kind == 'listener_progress':
@@ -435,20 +563,32 @@ class RtspListenerPanel(ListenerPanel):
                         self._storage_guard_detail = f'เหตุ guard ล่าสุด (เวลาเครื่อง {stamp}) | ขั้นตอน: {stage} | {guard}'
                     self.health_status.set(f'บันทึกประวัติไม่สำเร็จ | ขั้นตอน: {stage} — ไม่ลบประวัติหรือคิว')
                 if kind == 'error':
-                    if self._watching and not self.closing and not self._stopping and code != 'profile_changed':
+                    if self._prealert_probe is not None:
+                        if code == 'profile_changed':
+                            self.stop(); self.consent.set(False)
+                        elif self._prealert_pending():
+                            self._finish_alert_probe(False)
+                    elif self._watching and not self.closing and not self._stopping and code != 'profile_changed':
                         self._schedule_recovery()
                     else:
                         self._watching, self._retry_at = False, None
                         self._recovery.reset()
             elif kind == 'finished':
-                if self._watching and not self.closing and not self._stopping:
+                if self._prealert_probe is not None:
+                    if self._prealert_pending():self._finish_alert_probe(False)
+                elif self._watching and not self.closing and not self._stopping:
                     if not (self._recovery.pending and self._retry_at is not None):
                         self._schedule_recovery()
                 else:
                     self._watching, self._retry_at = False, None
                     self.status.set('หยุดรับเสียง RTSP — ประวัติอาจไม่ครบถ้าหยุดกลางรอบ')
-        self._service_recovery()
-        self._retry()
+        if owned_probe_stop and not self.runtime.is_running:
+            self._prealert_stopping = False
+        if self._prealert_pending():
+            self._service_alert_probe()
+        else:
+            self._service_recovery()
+            self._retry()
         if self._active and not self.is_running:
             self._active = False
         if hasattr(self,'_health_expected') and hasattr(self,'health_status'):

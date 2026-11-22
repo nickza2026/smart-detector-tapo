@@ -13,6 +13,7 @@ is a manual scope change, not recovery. Settings/recipient changes start a new
 grace period, not replay. A healthy static frame or silent PCM is still healthy.
 """
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 import math
 import re
 import threading
@@ -24,6 +25,15 @@ from .notify_api import AlertMessage, NotifyTarget, send_alert
 
 SNAPSHOT_MAX_AGE = SAMPLE_MAX_AGE
 _TITLE = 'SmartTapo ระบบภาพ/เสียง'
+PREFLIGHT_SECONDS = 20.0
+
+
+@dataclass(frozen=True, eq=False)
+class AudioPreflightRequest:
+    """Single-use in-process ticket, never an HTTP ID or a new manual scope."""
+    notice: object
+    generation: int
+    deadline: float
 
 
 def _finite(value):
@@ -88,7 +98,8 @@ class HealthAlertSupervisor:
     stop/scope changes cancel and ignore that result instead. An already-open
     HTTP request is irrevocable. Sender MUST check cancel before opening HTTP.
     """
-    def __init__(self, sender=send_health, clock=time.monotonic, *, history=None):
+    def __init__(self, sender=send_health, clock=time.monotonic, *, history=None,
+                 require_audio_preflight=False):
         if history is not None and sender is send_health:
             from functools import partial
             sender = partial(send_health, history=history)
@@ -111,6 +122,15 @@ class HealthAlertSupervisor:
         self._pending = False
         self._notices = {}
         self._blocked_channels = set()
+        self.require_audio_preflight = require_audio_preflight is True
+        self._audio_preflight_request = None
+        self._audio_preflight_failed = False
+
+    @property
+    def audio_preflight_request(self):
+        """Main-thread owner services this outside the supervisor lock."""
+        with self._lock:
+            return self._audio_preflight_request
 
     @property
     def status(self):
@@ -146,6 +166,43 @@ class HealthAlertSupervisor:
         self._pending = False
         self._notices = {}
         self._blocked_channels = set()
+        self._audio_preflight_request = None
+        self._audio_preflight_failed = False
+
+    def _audio_preflight(self, monitor, due, snapshots, now):
+        request = self._audio_preflight_request
+        audio = snapshots.get('audio', {})
+        audio = audio if isinstance(audio, dict) else {}
+        current = self._channels.get('audio')
+        observed = audio.get('observed_at')
+        fresh_good = (current is not None and audio.get('healthy') is True
+                      and audio.get('reason') == 'ok' and _finite(observed)
+                      and current[1] == observed and 0 <= now-observed <= SNAPSHOT_MAX_AGE)
+        if request is not None and (not monitor.is_current(request.notice)
+                or current is None or current[0] != request.generation
+                or fresh_good):
+            self._audio_preflight_request = None
+            self._audio_preflight_failed = False
+        if not self.require_audio_preflight:
+            return due
+        result = []
+        for notice in due:
+            if notice.channel != 'audio' or notice.kind == 'recovered':
+                result.append(notice)
+                continue
+            request = self._audio_preflight_request
+            if request is None or request.notice is not notice:
+                request = AudioPreflightRequest(notice, current[0], now + PREFLIGHT_SECONDS)
+                self._audio_preflight_request = request
+                self._audio_preflight_failed = False
+            # An unavailable owner/held reap also fails in bounded time; never
+            # renew the deadline on each poll or keep audio muted indefinitely.
+            if (now >= request.deadline or (audio.get('prealert_request') is request
+                    and audio.get('prealert_status') == 'failed')):
+                self._audio_preflight_failed = True
+            if self._audio_preflight_failed:
+                result.append(notice)
+        return result
 
     def _due(self, monitor, now):
         due = monitor.take_due(now)
@@ -256,6 +313,7 @@ class HealthAlertSupervisor:
                 self._job_cancel.set()
             self._reap()
             due = self._due(monitor, now)
+            due = self._audio_preflight(monitor, due, snapshots, now)
             if self._future is None and due:
                 notice = due[0]
                 cancel = threading.Event()
@@ -273,14 +331,25 @@ class HealthAlertSupervisor:
                     self._job_notice = None
                     self._status = 'unavailable'
             elif self._future is None and not due:
-                self._status = 'monitoring' if self._channels else 'idle'
+                self._status = ('recovering_audio' if self._audio_preflight_request is not None
+                                and not self._audio_preflight_failed else
+                                'monitoring' if self._channels else 'idle')
 
     def _deliver(self, monitor, notice, keys, cancel, epoch, importance='normal'):
         with self._lock:
+            preflight = self.require_audio_preflight and notice.channel == 'audio' and notice.kind != 'recovered'
+            request = self._audio_preflight_request
             if (self._closed or epoch != self._epoch or cancel.is_set()
                     or notice.channel in self._blocked_channels
+                    or (preflight and (request is None or request.notice is not notice
+                                       or not self._audio_preflight_failed))
                     or monitor is not self._monitor or not monitor.mark_sending(notice)):
                 return
+            if preflight:
+                # Consume only with a successful claim. A provider retry uses
+                # the same Notice/alert ID but needs a new restart ticket.
+                self._audio_preflight_request = None
+                self._audio_preflight_failed = False
             self._status = 'sending'
         try:
             outcome = self._sender(keys[0], keys[1], notice, cancel, importance)

@@ -27,6 +27,7 @@ def synthetic_report():
         notify_history_redacted=True, notify_history_fake_only=True,
         webhook_observation_delivery_completed=True,
         rtsp_audio_recovery_controls_gui=True,
+        rtsp_audio_prealert_restart_gui=True,
         real_windows_audio=False, real_adb=False, real_user_stream=False,
         external_delivery=False, webhook_real_http=False,
     )
@@ -53,6 +54,14 @@ class PackagedSmokeContractTests(unittest.TestCase):
         del report['rtsp_audio_recovery_controls_gui']
         with self.assertRaisesRegex(RuntimeError, 'rtsp_audio_recovery_controls_gui'):
             smoke_packaged.validate_smoke_report(report)
+
+    def test_missing_or_truthy_prealert_evidence_cannot_pass_frozen_smoke(self):
+        for value in (None, False, 1, 'True'):
+            report = synthetic_report()
+            if value is None:del report['rtsp_audio_prealert_restart_gui']
+            else:report['rtsp_audio_prealert_restart_gui']=value
+            with self.assertRaisesRegex(RuntimeError, 'rtsp_audio_prealert_restart_gui'):
+                smoke_packaged.validate_smoke_report(report)
 
     def test_other_credential_or_delivery_evidence_cannot_replace_roundtrip(self):
         for substitute in ('webhook_scoped_dpapi', 'notify_test_fake_only',

@@ -34,6 +34,11 @@ class AudioRecovery:
         self.due = None
         return True
 
+    def resume_observing(self):
+        """A pre-alert producer returned; retain spent attempts until 30s proof."""
+        self.active, self.exhausted = True, False
+        self.due = self.good_since = self.good_last = None
+
     def observe_good(self, observed):
         if not self.pending or self.due is not None:
             return
@@ -44,3 +49,19 @@ class AudioRecovery:
         self.good_last = observed
         if observed - self.good_since >= RECOVERY_SECONDS:
             self.reset()
+
+
+class AudioAlertProbe:
+    """One owned reap/start/proof attempt, with a fixed supervisor deadline."""
+    def __init__(self, request, now):
+        self.request = request
+        self.phase = 'stopping'
+        self.due = min(request.deadline, now + SAMPLE_MAX_AGE)
+
+    @property
+    def pending(self):
+        return self.phase in ('stopping', 'receiving')
+
+    def started(self, now):
+        self.phase = 'receiving'
+        self.due = min(self.request.deadline, now + SAMPLE_MAX_AGE)

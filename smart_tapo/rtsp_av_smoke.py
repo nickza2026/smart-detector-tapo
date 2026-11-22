@@ -9,6 +9,59 @@ import numpy as np
 from PIL import Image,ImageDraw
 
 
+def smoke_audio_prealert(app, profile, fake, now):
+    """Frozen actual Desktop poll bridge; held fake sender, no HTTP or camera."""
+    from concurrent.futures import Future
+    from .desktop_health_alerts import HealthAlertSupervisor
+    class Held:
+        def __init__(self):self.jobs=[]
+        def submit(self,fn,*args):
+            future=Future();self.jobs.append((future,fn,args));return future
+        def run(self):
+            if self.jobs:
+                future,fn,args=self.jobs.pop(0)
+                if future.set_running_or_notify_cancel():future.set_result(fn(*args))
+        def shutdown(self,**kwargs):
+            for future,_,_ in self.jobs:future.cancel()
+    listener=app.audio_panel.listener_panel
+    original=(app.health_alerts,app._health_credentials,app.config)
+    calls=[];held=Held()
+    supervisor=HealthAlertSupervisor(lambda *args:calls.append(args[2]) or 'success',
+                                      lambda:now[0],require_audio_preflight=True)
+    supervisor._executor.shutdown(wait=False)
+    supervisor._executor=held
+    try:
+        listener.stop()
+        app.health_alerts=supervisor;app._health_credentials=('synthetic-key','https://notify.example')
+        app.config=replace(app.config,notify_enabled=True,health_failure_seconds=1,health_repeat_seconds=60)
+        app.form['rtsp_url'].set(app.config.rtsp_url)
+        listener.profile_path.set(str(profile));listener.consent.set(True);listener.start_button.invoke()
+        listener._recovery.attempts=3;listener._recovery.fail(now[0])
+        listener._watching=False;listener._health_reason='audio_listener_failed';fake.is_running=False
+        initial=len(fake.calls);generation=listener._health_generation
+        app._poll_health()
+        for index in range(2):
+            now[0]+=1 if index==0 else 60
+            listener.poll();app._poll_health();held.run()
+            if len(fake.calls)!=initial+index+1 or len(calls)!=index:
+                raise RuntimeError('Audio notice did not await its own one-start preflight')
+            now[0]+=8;listener.poll();app._poll_health();held.run()
+            if len(calls)!=index+1:raise RuntimeError('Failed preflight muted health indefinitely')
+        now[0]+=60;listener.poll();app._poll_health()
+        now[0]+=1
+        fake.events=[dict(kind='listener_progress',waiting_audio=False,stage='persisted',
+            heartbeat=now[0],pcm_started_at=listener._health_since,audio_frames=16000,pcm_session='d'*32)]
+        listener.poll();app._poll_health();held.run()
+        if len(calls)!=2 or not listener.health_snapshot()['healthy'] or listener._health_generation!=generation:
+            raise RuntimeError('Fresh preflight PCM did not cancel fault within the original scope')
+        listener.stop();app._poll_health();held.run()
+        if len(calls)!=2:raise RuntimeError('Manual audio stop produced a late preflight notice')
+        return True
+    finally:
+        listener.stop();supervisor.close()
+        app.health_alerts,app._health_credentials,app.config=original
+
+
 def smoke_audio_rearm(root, app, profile):
     """Actual widgets/frozen module, fake producer; never open a new source."""
     listener=app.audio_panel.listener_panel
@@ -52,7 +105,8 @@ def smoke_audio_rearm(root, app, profile):
         listener.consent.set(True)
         if not listener.start_button.instate(['disabled']) or 'บันทึก' not in listener.start_hint.get():
             raise RuntimeError('Unsaved audio source did not expose its admission blocker')
-        return {'rtsp_audio_recovery_controls_gui':True}
+        prealert=smoke_audio_prealert(app,profile,fake,now)
+        return {'rtsp_audio_recovery_controls_gui':True,'rtsp_audio_prealert_restart_gui':prealert}
     finally:
         listener.stop()
         listener.runtime,listener.clock,app.config,old_path=original
