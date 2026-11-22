@@ -2,6 +2,7 @@ import tempfile
 import time
 import tkinter as tk
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -52,6 +53,22 @@ class HistoryGuiTests(unittest.TestCase):
         self.panel._show_viewer('a',())
         self.assertIn('ไม่มีภาพ',self.panel.status.get())
         self.assertIsNone(self.panel.viewer)
+
+    def test_table_and_retention_label_use_thai_time(self):
+        self.panel.poll(False)
+        started = datetime(2026, 10, 27, 17, 30, tzinfo=timezone.utc).timestamp()
+        event = HistoryEvent('thai-time', 'stuck', started, started+60, None, None, 0)
+        self.panel._render(HistoryPage((event,)))
+        values = self.panel.tree.item('thai-time', 'values')
+        self.assertEqual(values[:2], ('28/10/2026 00:30:00', '28/10/2026 00:31:00'))
+        self.assertIn('เวลาไทย (UTC+7)', self.panel.retention.get())
+
+    def test_operator_log_lines_have_thai_time_without_double_prefix(self):
+        self.app._append_log('worker: synthetic status')
+        self.app._append_log('[28/10/2026 00:30:00 UTC+7] worker: original time')
+        lines = self.app.log.get('1.0','end').strip().splitlines()
+        self.assertRegex(lines[-2], r'^\[\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2} UTC\+7\] worker: synthetic status$')
+        self.assertEqual(lines[-1], '[28/10/2026 00:30:00 UTC+7] worker: original time')
 
     def test_start_stop_web_remembers_port_without_restarting_worker(self):
         self.controller.active=True

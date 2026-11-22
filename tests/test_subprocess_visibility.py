@@ -55,13 +55,20 @@ class SubprocessVisibilityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             config=replace(Config(),data_dir=Path(directory),adb_serial='emulator-5554',memu_executable='MEmu.exe')
             runner=Mock(return_value=subprocess.CompletedProcess([],1,b'',b''))
-            launcher=Mock()
+            stop=threading.Event()
+            launcher=Mock(side_effect=lambda *args,**kwargs:stop.set())
             adb=Adb(config,runner=runner,launcher=launcher)
-            stop=threading.Event();stop.set()
             with patch('smart_tapo.runtime.os.name','nt'), \
                  patch('subprocess.CREATE_NO_WINDOW',0x08000000,create=True):
                 with self.assertRaises(CaptureError):adb.connect(stop)
             launcher.assert_called_once_with(['MEmu.exe'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+
+    def test_stopped_connect_never_launches_emulator_or_runs_adb(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config=replace(Config(),data_dir=Path(directory),adb_serial='emulator-5554',memu_executable='MEmu.exe')
+            runner=Mock();launcher=Mock();stop=threading.Event();stop.set()
+            with self.assertRaises(CaptureError):Adb(config,runner=runner,launcher=launcher).connect(stop)
+            runner.assert_not_called();launcher.assert_not_called()
 
 
 if __name__=='__main__':unittest.main()
